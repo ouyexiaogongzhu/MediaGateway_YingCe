@@ -54,6 +54,7 @@ type Service struct {
 	routeHealthMu              sync.Mutex
 	routeHealthBlocked         map[string]time.Time
 	workers                    *workerRuntime
+	mediaGatewayClient         *gatewayClient
 	updateManager              UpdateManager
 	mailSender                 func(emailSettingValue, string, string, string) error
 }

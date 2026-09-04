@@ -782,6 +782,26 @@ func RegisterProjectRoutes(r *gin.RouterGroup, svc *service.Service) {
 		}
 		ok(c, gin.H{"shots": shots})
 	})
+	r.POST("/projects/:id/shots/render-all", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 64<<10)
+		var req service.RenderAllShotsRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			fail(c, http.StatusBadRequest, err)
+			return
+		}
+		// 同步编排：串行渲染全部镜头后拼接成片，单镜头超时默认 30 分钟。
+		result, err := svc.RenderAllProjectShots(c.Request.Context(), user.ID, c.Param("id"), req)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		ok(c, result)
+	})
 	r.POST("/projects/:id/shots/:shotId/revisions", func(c *gin.Context) {
 		user, err := currentUser(c, svc)
 		if err != nil {
