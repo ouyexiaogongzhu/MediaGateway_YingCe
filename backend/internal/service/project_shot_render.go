@@ -20,6 +20,8 @@ import (
 type RenderAllShotsRequest struct {
 	MusicPrompt string `json:"musicPrompt"`
 	FromShotID  string `json:"fromShotId"`
+	// Draft：纯 h3 快速草稿（跳过 image/voice/music/混音，512x288），确认构图后再走完整链
+	Draft bool `json:"draft"`
 }
 
 type RenderAllShotsResult struct {
@@ -133,7 +135,7 @@ func (s *Service) renderProjectShot(ctx context.Context, gateway *gatewayClient,
 	}
 	continueChain := strings.TrimSpace(previousLastFrame) != ""
 	params := map[string]any{}
-	if !continueChain {
+	if !continueChain && !req.Draft {
 		imagePrompt := strings.TrimSpace(revision.ImagePrompt)
 		if imagePrompt == "" {
 			return result, "", false, BadAuthRequest("首镜头缺少画面提示词，无法生成首帧")
@@ -154,6 +156,13 @@ func (s *Service) renderProjectShot(ctx context.Context, gateway *gatewayClient,
 	if seconds > 0 {
 		video["seconds"] = seconds
 	}
+	if req.Draft {
+		// ponytail: 草稿固定 512x288，竖屏分寸需要按项目画幅细分时再查 project
+		video["width"], video["height"] = 512, 288
+		if !continueChain {
+			delete(video, "first_frame") // 草稿没有 image 阶段，纯文生视频
+		}
+	}
 	paths, cleanup, resolveErr := s.resolveShotReferencePaths(userID, references)
 	defer cleanup()
 	if resolveErr != nil {
@@ -164,14 +173,15 @@ func (s *Service) renderProjectShot(ctx context.Context, gateway *gatewayClient,
 	}
 	params["video"] = video
 	voiceSkipped := false
-	if dialogue := strings.TrimSpace(revision.Dialogue); dialogue != "" {
+	dialogue := strings.TrimSpace(revision.Dialogue)
+	if !req.Draft && dialogue != "" {
 		if voiceKey := s.shotVoiceKey(userID, references); voiceKey != "" {
 			params["voice"] = map[string]any{"text": dialogue, "voice": voiceKey}
 		} else {
 			voiceSkipped = true
 		}
 	}
-	if musicPrompt := strings.TrimSpace(req.MusicPrompt); musicPrompt != "" {
+	if musicPrompt := strings.TrimSpace(req.MusicPrompt); musicPrompt != "" && !req.Draft {
 		music := map[string]any{"prompt": musicPrompt}
 		if seconds > 0 {
 			music["duration_s"] = seconds

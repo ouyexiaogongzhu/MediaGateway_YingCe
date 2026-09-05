@@ -310,7 +310,7 @@ export default function WorkflowProductionWorkbench(props: Props) {
         onError: (error) => message.error(error instanceof Error ? error.message : "镜头资产更新失败"),
     });
 
-    const generateArtifact = async () => {
+    const generateArtifact = async (draft = false) => {
         if (!selectedShot || submittingShotIds.has(selectedShot.id)) return;
         const submittingShot = selectedShot;
         setSubmittingShotIds((current) => new Set(current).add(submittingShot.id));
@@ -341,11 +341,11 @@ export default function WorkflowProductionWorkbench(props: Props) {
             });
             const mode = generationCapability;
             if (mode === "video") {
-                // 镜头视频走 shot worker 完整链（台词 Ref2VA 对口型 + h3 音轨静音 + BGM 混音），
-                // 不走裸 canvas_video 快路径（那条路没有 voice/music，h3 自带音轨是噪音源）
-                const rendered = await renderProjectShot(projectId, saved.shot.id, {
-                    musicPrompt: "电影氛围配乐，贴合画面情绪",
-                });
+                // 镜头视频走 shot worker 完整链（台词 Ref2VA 对口型 + h3 音轨静音 + BGM 混音）；
+                // draft=true 时纯 h3 小尺寸快速草稿，确认构图后再出完整版
+                const rendered = await renderProjectShot(projectId, saved.shot.id, draft
+                    ? { draft: true }
+                    : { musicPrompt: "电影氛围配乐，贴合画面情绪" });
                 if (activeShotIdRef.current === submittingShot.id) setEditorDirty(false);
                 await onRefresh();
                 message.success(`镜头视频已生成${rendered.videoPath ? "" : "（产物同步中）"}`);
@@ -560,7 +560,7 @@ export default function WorkflowProductionWorkbench(props: Props) {
                             <div className="workflow-generation-cost" aria-live="polite">
                                 {creditsEnabled && formattedGenerationCredits ? <><CreditSymbol /><span>本次预计 {formattedGenerationCredits} 积分</span></> : creditsEnabled && routedModel ? <span>本次费用将在提交时按实际规格计算</span> : null}
                             </div>
-                            <div className="flex items-center gap-2"><Button danger icon={<Trash2 className="size-4" />} loading={deleteShot.isPending} disabled={saveShot.isPending || selectedShotSubmitting || changeAssetBinding.isPending} onClick={requestDeleteShot}>删除镜头</Button><Button htmlType="submit" icon={<Save className="size-4" />} loading={saveShot.isPending} disabled={!editorDirty || deleteShot.isPending}>保存脚本</Button><Button type="primary" icon={<Play className="size-4" />} loading={selectedShotSubmitting || shotTask?.status === "queued" || shotTask?.status === "running"} disabled={deleteShot.isPending} onClick={() => void generateArtifact()}>{selectedShotSubmitting ? `${stageCopy.action}（正在提交）` : shotTask?.status === "queued" || shotTask?.status === "running" ? `${stageCopy.action}（已运行${shotTaskElapsed}）` : shotTask?.status === "failed" ? `${stageCopy.action}（上次失败，可重试）` : shotTask?.status === "succeeded" && !newestArtifact ? `${stageCopy.action}（已完成，正在同步）` : newestArtifact ? `${stageCopy.action}（已生成）` : stageCopy.action}</Button></div>
+                            <div className="flex items-center gap-2"><Button danger icon={<Trash2 className="size-4" />} loading={deleteShot.isPending} disabled={saveShot.isPending || selectedShotSubmitting || changeAssetBinding.isPending} onClick={requestDeleteShot}>删除镜头</Button><Button htmlType="submit" icon={<Save className="size-4" />} loading={saveShot.isPending} disabled={!editorDirty || deleteShot.isPending}>保存脚本</Button>{activeStage === "video" && <Button loading={selectedShotSubmitting} disabled={deleteShot.isPending} onClick={() => void generateArtifact(true)}>生成草稿</Button>}<Button type="primary" icon={<Play className="size-4" />} loading={selectedShotSubmitting || shotTask?.status === "queued" || shotTask?.status === "running"} disabled={deleteShot.isPending} onClick={() => void generateArtifact()}>{selectedShotSubmitting ? `${stageCopy.action}（正在提交）` : shotTask?.status === "queued" || shotTask?.status === "running" ? `${stageCopy.action}（已运行${shotTaskElapsed}）` : shotTask?.status === "failed" ? `${stageCopy.action}（上次失败，可重试）` : shotTask?.status === "succeeded" && !newestArtifact ? `${stageCopy.action}（已完成，正在同步）` : newestArtifact ? `${stageCopy.action}（已生成）` : stageCopy.action}</Button></div>
                         </footer>
                     </Form>
                 </section>
