@@ -9,6 +9,8 @@ import (
 	"image/png"
 	"strings"
 	"testing"
+
+	"infinite-canvas/backend/internal/protocol"
 )
 
 // buildSheetPNG 合成一张四格拼图：白色 8px 留白分隔，每格为竖向渐变的纯色底，
@@ -30,12 +32,13 @@ func buildSheetPNG(t *testing.T, panelWidth, panelHeight int) string {
 	for p := 0; p < panels; p++ {
 		left := p * (panelWidth + gap)
 		for y := 0; y < height; y++ {
-			shade := uint8(int(bases[p].R)*0 + y*120/height) // 竖向渐变，保证列内有灰度差
+			// 竖向渐变叠加细微纹理，模拟真实照片列内的灰度起伏。
+			shade := uint8((y * 7) % 13)
 			for x := left; x < left+panelWidth; x++ {
 				img.SetRGBA(x, y, color.RGBA{
-					R: bases[p].R + shade/2,
-					G: bases[p].G + shade/3,
-					B: bases[p].B + shade/4,
+					R: bases[p].R + shade,
+					G: bases[p].G + shade,
+					B: bases[p].B + shade,
 					A: 255,
 				})
 			}
@@ -96,7 +99,7 @@ func TestSplitCharacterSheetLandscapePhoto(t *testing.T) {
 	img := image.NewRGBA(image.Rect(0, 0, 960, 540))
 	for y := 0; y < 540; y++ {
 		for x := 0; x < 960; x++ {
-			v := uint8((x*255)/960 + (y*60)/540)
+			v := uint8((x*255)/960 + (y*7)%13)
 			img.SetRGBA(x, y, color.RGBA{R: v, G: uint8(y * 255 / 540), B: 90, A: 255})
 		}
 	}
@@ -126,5 +129,30 @@ func TestSplitCharacterSheetBadInput(t *testing.T) {
 	}
 	if _, ok := splitCharacterSheetDataUrl("https://example.com/a.png"); ok {
 		t.Fatal("non-dataURL must return false")
+	}
+}
+
+func TestSplitCharacterSheetReferenceWiring(t *testing.T) {
+	sheet := buildSheetPNG(t, 300, 400)
+	item := protocol.MediaReference{
+		ID: "img1", DataURL: sheet, Kind: "image", Role: "edit_source", Name: "sheet.png", Order: 2,
+		Metadata: map[string]any{"width": 1224, "height": 400},
+	}
+	split, ok := splitCharacterSheetReference(item)
+	if !ok || len(split) != 2 {
+		t.Fatalf("expected split into 2 references, ok=%v len=%d", ok, len(split))
+	}
+	if split[0].Name != "sheet.png_closeup" || split[1].Name != "sheet.png_front" {
+		t.Fatalf("unexpected names: %q %q", split[0].Name, split[1].Name)
+	}
+	if split[0].Role != "edit_source" || split[0].Order != 2 || split[0].Kind != "image" {
+		t.Fatalf("role/order/kind must be preserved, got %+v", split[0])
+	}
+	if w := split[0].Metadata["width"].(int); w != 300 {
+		t.Fatalf("panel metadata width = %v, want 300", w)
+	}
+	// URL 引用不动。
+	if _, ok := splitCharacterSheetReference(protocol.MediaReference{URL: "https://example.com/a.png"}); ok {
+		t.Fatal("URL reference must not be split")
 	}
 }

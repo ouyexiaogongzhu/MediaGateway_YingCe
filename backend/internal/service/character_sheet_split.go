@@ -16,11 +16,11 @@ import (
 // 编辑参考发给生图模型会把四格人物平均，还原变差。这里做一次保守的自动裁切：
 // 只在证据充分（≥3 个有效面板）时裁出前两格（特写+正面），任何失败都退回原图。
 const (
-	sheetMinWidth          = 600  // 拼图必为宽幅横幅
-	sheetMinPanelWidth     = 100  // 单格最小宽度
-	sheetMinSeparatorWidth = 4    // 格间留白至少这么宽才算分隔线（滤掉面板内部的偶发匀色列）
-	sheetBlankDiffPerPair  = 6    // 相邻采样像素灰度差平均值 ≤6 视为留白列
-	sheetMinValidPanels    = 3    // 至少 3 格才认定是拼图
+	sheetMinWidth          = 600 // 拼图必为宽幅横幅
+	sheetMinPanelWidth     = 100 // 单格最小宽度
+	sheetMinSeparatorWidth = 4   // 格间留白至少这么宽才算分隔线（滤掉面板内部的偶发匀色列）
+	sheetBlankDiffPerPair  = 6   // 相邻采样像素灰度差平均值 ≤6 视为留白列
+	sheetMinValidPanels    = 3   // 至少 3 格才认定是拼图
 )
 
 // splitCharacterSheetDataUrl 检测 dataURL 图片是否为多格角色三视图拼图；
@@ -80,16 +80,16 @@ func splitCharacterSheetImage(src image.Image) ([]image.Image, bool) {
 	// 分隔线之间（含图像两端）的面板候选。
 	var panels []segment
 	cursor := 0
-	appendPanel := func(end int) {
+	flushPanel := func(end int) {
 		if end-cursor >= sheetMinPanelWidth && height*10 >= (end-cursor)*11 {
 			panels = append(panels, segment{cursor, end})
 		}
-		cursor = end
 	}
 	for _, sep := range separators {
-		appendPanel(sep.start)
+		flushPanel(sep.start)
+		cursor = sep.end
 	}
-	appendPanel(width)
+	flushPanel(width)
 	if len(panels) < sheetMinValidPanels {
 		return nil, false
 	}
