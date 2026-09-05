@@ -2463,6 +2463,10 @@ func protocolImageReferences(input canvasGenerationInput) []protocol.MediaRefere
 		item.Role = "reference_image"
 		if input.Mode == "image" {
 			item.Role = "edit_source"
+			if panels, ok := splitCharacterSheetReference(item); ok {
+				result = append(result, panels...)
+				continue
+			}
 		}
 		if item.URL != "" || item.DataURL != "" {
 			result = append(result, item)
