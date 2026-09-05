@@ -549,6 +549,10 @@ export function saveProjectShot(projectId: string, input: { id?: string; unitId?
     return request<{ shot: ProjectShot }>(api.post(`/projects/${encodeURIComponent(projectId)}/shots`, input));
 }
 
+export function renderProjectShot(projectId: string, shotId: string, input: { musicPrompt?: string } = {}) {
+    return request<{ shotId: string; position: number; jobId: string; videoPath: string; videoArtifactId: string; lastFramePath?: string; lastFrameArtifactId?: string }>(api.post(`/projects/${encodeURIComponent(projectId)}/shots/${encodeURIComponent(shotId)}/render`, input));
+}
+
 export function deleteProjectShot(projectId: string, shotId: string) {
     return request<{ deleted: boolean }>(api.delete(`/projects/${encodeURIComponent(projectId)}/shots/${encodeURIComponent(shotId)}`));
 }

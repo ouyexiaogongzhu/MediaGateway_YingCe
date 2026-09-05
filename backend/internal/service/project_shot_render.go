@@ -338,3 +338,42 @@ func (s *Service) registerGatewayFileResource(userID string, projectTitle string
 	resource, _, err := s.storeResource(userID, "video", shortTitle(title, 60)+"-render-all.mp4", "video/mp4", stat.Size(), 0, 0, durationMs, file, nil)
 	return resource, err
 }
+
+// RenderProjectShot 渲染单个分镜：走 shot worker 完整链（image→voice→video→music→混音，
+// 台词 Ref2VA + h3 音轨静音），不做跨镜续链与拼接。供「生成镜头视频」按钮直连，
+// 替换裸 canvas_video 快路径（那条路没有 voice/music，且 h3 自带音轨是噪音源）。
+func (s *Service) RenderProjectShot(ctx context.Context, userID string, projectID string, shotID string, req RenderAllShotsRequest) (*RenderedShotResult, error) {
+	if _, err := s.activeProjectForUser(userID, projectID); err != nil {
+		return nil, err
+	}
+	gateway := s.mediaGateway()
+	shots, err := s.repo.ProjectShots(projectID)
+	if err != nil {
+		return nil, err
+	}
+	var shot *model.Shot
+	for index := range shots {
+		if shots[index].ID == shotID {
+			shot = &shots[index]
+			break
+		}
+	}
+	if shot == nil {
+		return nil, NotFound("分镜不存在")
+	}
+	references, err := s.repo.ProjectShotAssetReferences(projectID)
+	if err != nil {
+		return nil, err
+	}
+	var shotRefs []model.ShotAssetReference
+	for _, reference := range references {
+		if reference.ShotID == shotID {
+			shotRefs = append(shotRefs, reference)
+		}
+	}
+	rendered, _, _, err := s.renderProjectShot(ctx, gateway, userID, projectID, shot, "", shotRefs, req)
+	if err != nil {
+		return nil, err
+	}
+	return &rendered, nil
+}

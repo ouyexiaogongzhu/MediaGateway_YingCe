@@ -22,6 +22,7 @@ import {
     deleteProjectShot,
     linkShotAsset,
     listProjectAssetsPage,
+    renderProjectShot,
     saveProjectShot,
     unlinkShotAsset,
     type ProjectAsset,
@@ -322,10 +323,12 @@ export default function WorkflowProductionWorkbench(props: Props) {
             }
             if (!productionStep) throw new Error("当前生成阶段不可用，请刷新页面后重试");
             if (productionStep.status === "failed") throw new Error("当前生成阶段失败，请刷新后重试");
-            if (!routedModel) throw new Error(activeStage === "video" ? "请先配置视频模型" : "请先配置图片模型");
-            if (routedModel.startsWith("local:dreamina-cli")) throw new Error("本机即梦任务暂不能登记到分镜产物，请选择后端模型渠道");
-            const compatibilityError = modelCompatibilityError(effectiveConfig, routedModel, modelRequirements);
-            if (compatibilityError) throw new Error(`当前模型配置不可用：${compatibilityError}`);
+            if (generationCapability !== "video") {
+                if (!routedModel) throw new Error("请先配置图片模型");
+                if (routedModel.startsWith("local:dreamina-cli")) throw new Error("本机即梦任务暂不能登记到分镜产物，请选择后端模型渠道");
+                const compatibilityError = modelCompatibilityError(effectiveConfig, routedModel, modelRequirements);
+                if (compatibilityError) throw new Error(`当前模型配置不可用：${compatibilityError}`);
+            }
             const saved = await saveProjectShot(projectId, {
                 id: submittingShot.id,
                 unitId,
@@ -337,11 +340,20 @@ export default function WorkflowProductionWorkbench(props: Props) {
                 revision: revisionInput(values),
             });
             const mode = generationCapability;
+            if (mode === "video") {
+                // 镜头视频走 shot worker 完整链（台词 Ref2VA 对口型 + h3 音轨静音 + BGM 混音），
+                // 不走裸 canvas_video 快路径（那条路没有 voice/music，h3 自带音轨是噪音源）
+                const rendered = await renderProjectShot(projectId, saved.shot.id, {
+                    musicPrompt: "电影氛围配乐，贴合画面情绪",
+                });
+                if (activeShotIdRef.current === submittingShot.id) setEditorDirty(false);
+                await onRefresh();
+                message.success(`镜头视频已生成${rendered.videoPath ? "" : "（产物同步中）"}`);
+                return;
+            }
             const config = { ...generationConfig, videoSeconds: String(Math.max(1, Math.round(values.durationSeconds))) };
             if (!isAiConfigReady(config, routedModel)) throw new Error("当前模型渠道配置不完整，请先到设置中补齐");
-            const basePrompt = mode === "video"
-                ? [values.videoPrompt || values.plotDescription, values.action, values.dialogue && `台词：${values.dialogue}`, values.continuityNotes].filter(Boolean).join("\n")
-                : [values.imagePrompt || values.plotDescription, values.action, "黑白分镜草图，清晰动作节拍，电影构图"].filter(Boolean).join("\n");
+            const basePrompt = [values.imagePrompt || values.plotDescription, values.action, "黑白分镜草图，清晰动作节拍，电影构图"].filter(Boolean).join("\n");
             const resolvedPrompt = resolveShotAssetMentionPrompt(basePrompt, shotAssetReferenceContext, { dialogue: values.dialogue });
             const skillExecution = await skillRuntime.prepare({
                 profile: "shortDrama",
@@ -366,7 +378,6 @@ export default function WorkflowProductionWorkbench(props: Props) {
                     artifactType,
                     role: "output",
                     source: "short-drama-workflow",
-                    ...(mode === "video" && shotAssetReferenceContext.referenceImages.length ? { videoEditOperation: "reference_to_video" } : {}),
                     resolvedCharacterVersions: shotAssetReferenceContext.resolvedCharacterVersions,
                     artifactMetadata: { model: routedModel, aspectRatio, resolution, durationSeconds: values.durationSeconds, ...skillExecution.metadata },
                 },
