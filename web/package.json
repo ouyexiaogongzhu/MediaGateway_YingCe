@@ -17,7 +17,7 @@
         "format:check": "prettier --check ."
     },
     "dependencies": {
-        "@ant-design/icons": "^6.3.2",
+        "@ant-design/icons": "^6.3.4",
         "@ant-design/x": "^2.9.0",
         "@codemirror/lang-json": "^6.0.2",
         "@excalidraw/excalidraw": "0.18.1",
