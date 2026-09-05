@@ -34,7 +34,7 @@ func defaultPromptDefinitions() []PromptOperationDefinition {
 			Operation: promptOperationStoryboardFirstFrame, Label: "分镜首帧", Category: "生成", OutputType: "text",
 			Description: "把单镜头结构转换为图片模型使用的首帧提示词。",
 			Variables:   []PromptTemplateVariable{{Label: "项目视觉", Placeholder: "{{项目视觉}}"}, {Label: "首帧构图", Placeholder: "{{首帧构图}}"}, {Label: "表演起始状态", Placeholder: "{{表演起始状态}}"}, {Label: "负面要求", Placeholder: "{{负面要求}}"}},
-			DefaultContent: `生成单一、可执行的分镜首帧。严格继承项目视觉媒介和角色资产；画面明确主体左右位置、视线、前中后景、遮挡、视觉焦点、可信光源与材质。只描述静止首帧，不提前写后续运动，不添加画外人物、无来源光线、文字或水印。
+			DefaultContent: `生成单一、可执行的分镜首帧。严格继承项目视觉媒介和角色资产；画面明确主体左右位置、视线、前中后景、遮挡、视觉焦点、可信光源与材质。只描述静止首帧，不提前写后续运动，不添加画外人物、无来源光线、文字或水印。参考资产图像中的角色即本镜头主角：同一张脸、同一发型、同一套服装，肩颈剪裁、裙裤款式、露肩与配饰等细节逐一对应，不得增删或替换；真人实拍质感，真实皮肤纹理与布料细节。
 
 【项目视觉】
 {{项目视觉}}
