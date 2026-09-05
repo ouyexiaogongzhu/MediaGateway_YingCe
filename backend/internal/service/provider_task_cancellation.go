@@ -212,7 +212,9 @@ func (s *Service) providerCancellationInput(task *model.Task) (canvasGenerationI
 }
 
 func supportsProviderCancellation(interfaceType string) bool {
-	return interfaceType == string(model.ChannelInterfaceGeminiVeo) || interfaceType == string(model.ChannelInterfaceVolcengineArkVideo)
+	return interfaceType == string(model.ChannelInterfaceGeminiVeo) ||
+		interfaceType == string(model.ChannelInterfaceVolcengineArkVideo) ||
+		interfaceType == string(model.ChannelInterfaceNewAPIVideo)
 }
 
 func cancelProviderTask(ctx context.Context, config providerConfig, providerRequestID string) error {
@@ -223,6 +225,9 @@ func cancelProviderTask(ctx context.Context, config providerConfig, providerRequ
 	case string(model.ChannelInterfaceVolcengineArkVideo):
 		path := "/contents/generations/tasks/" + url.PathEscape(providerRequestID)
 		return deleteProviderTask(ctx, config, path)
+	case string(model.ChannelInterfaceNewAPIVideo):
+		// MediaGateway 兼容层：DELETE /v1/videos/{id} 触发协作取消
+		return deleteProviderTask(ctx, config, "/videos/"+url.PathEscape(providerRequestID))
 	default:
 		return errors.New("当前上游协议不支持取消")
 	}
@@ -266,6 +271,21 @@ func queryProviderCancellation(ctx context.Context, config providerConfig, provi
 			return providerCancellationFailed, firstNonEmpty(message, "failed"), nil
 		}
 		return providerCancellationSucceeded, "succeeded", nil
+	case string(model.ChannelInterfaceNewAPIVideo):
+		var state map[string]any
+		if err := getJSON(ctx, config, "/videos/"+url.PathEscape(providerRequestID), &state); err != nil {
+			return "", "", err
+		}
+		status := strings.ToLower(strings.TrimSpace(stringField(state, "status")))
+		switch status {
+		case "failed":
+			// MediaGateway 把已取消的任务呈现为 failed
+			return providerCancellationConfirmed, "cancelled", nil
+		case "completed":
+			return providerCancellationSucceeded, "succeeded", nil
+		default:
+			return providerCancellationPending, status, nil
+		}
 	case string(model.ChannelInterfaceVolcengineArkVideo):
 		var state map[string]any
 		if err := getJSON(ctx, config, "/contents/generations/tasks/"+url.PathEscape(providerRequestID), &state); err != nil {

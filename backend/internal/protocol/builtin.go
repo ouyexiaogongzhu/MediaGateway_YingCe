@@ -281,7 +281,7 @@ func openAIVideosAdapter() Adapter {
 	info := metadata("newapi", "OpenAI Videos", "OpenAI compatible", CapabilityVideo, "POST /v1/videos", "GET /v1/videos/{task_id}", "multipart/form-data")
 	info.LegacyAliases = []string{"openai-video", "openai-videos"}
 	info.Parameters = openAIVideoParams()
-	return videoAdapter(info, func(r GenerationRequest) (RequestSpec, error) {
+	adapter := videoAdapter(info, func(r GenerationRequest) (RequestSpec, error) {
 		body := map[string]any{"model": r.Model, "prompt": r.Prompt}
 		if r.Duration > 0 {
 			body["seconds"] = strconv.Itoa(r.Duration)
@@ -294,6 +294,14 @@ func openAIVideosAdapter() Adapter {
 		}
 		return RequestSpec{Method: http.MethodPost, Path: "/v1/videos", ContentType: "multipart/form-data", Body: body}, nil
 	})
+	if ba, ok := adapter.(builtinAdapter); ok {
+		ba.cancel = func(c PollContext) (RequestSpec, error) {
+			return RequestSpec{Method: http.MethodPost,
+				Path: "/v1/videos/" + url.PathEscape(c.TaskID) + "/cancel"}, nil
+		}
+		return ba
+	}
+	return adapter
 }
 
 func openAIVideoParams() []Parameter {
