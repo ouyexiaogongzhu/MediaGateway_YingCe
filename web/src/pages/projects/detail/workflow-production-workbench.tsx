@@ -322,7 +322,10 @@ export default function WorkflowProductionWorkbench(props: Props) {
                 productionStep = (initialized.workflow.steps || []).find((step) => step.stepKey === activeStage);
             }
             if (!productionStep) throw new Error("当前生成阶段不可用，请刷新页面后重试");
-            if (productionStep.status === "failed") throw new Error("当前生成阶段失败，请刷新后重试");
+            // video 走专用 render 端点，不写 workflow step —— step 的 failed 状态不适用
+            if (generationCapability !== "video" && productionStep.status === "failed") {
+                throw new Error("当前生成阶段失败，请刷新后重试");
+            }
             if (generationCapability !== "video") {
                 if (!routedModel) throw new Error("请先配置图片模型");
                 if (routedModel.startsWith("local:dreamina-cli")) throw new Error("本机即梦任务暂不能登记到分镜产物，请选择后端模型渠道");

@@ -96,6 +96,14 @@ func (s *Service) RenderAllProjectShots(ctx context.Context, userID string, proj
 		if voiceSkipped {
 			result.VoiceSkippedShotIDs = append(result.VoiceSkippedShotIDs, shot.ID)
 		}
+		if index > start && previousLastFrame == "" {
+			// 上一镜没拿到尾帧：静默重建首帧会让多镜连续性无声断裂，宁可显式失败
+			title := strings.TrimSpace(shot.Title)
+			if title == "" {
+				title = shot.ID
+			}
+			return nil, fmt.Errorf("镜头「%s」未返回尾帧，多镜连续性中断", title)
+		}
 		result.Shots = append(result.Shots, rendered)
 		previousLastFrame = lastFramePath
 		concatPaths = append(concatPaths, rendered.VideoPath)
@@ -125,6 +133,9 @@ func (s *Service) RenderAllProjectShots(ctx context.Context, userID string, proj
 
 // renderProjectShot 渲染单个镜头并回写产物；返回尾帧路径供下一镜头接力。
 func (s *Service) renderProjectShot(ctx context.Context, gateway *gatewayClient, userID string, projectID string, shot *model.Shot, previousLastFrame string, references []model.ShotAssetReference, req RenderAllShotsRequest) (RenderedShotResult, string, bool, error) {
+	// 渲染可达数分钟：HTTP 客户端断开/代理超时不应中断产物链，
+	// 否则 gateway 侧 job 成孤儿继续烧算力，而本地 artifact/状态全部缺失。
+	ctx = context.WithoutCancel(ctx)
 	result := RenderedShotResult{ShotID: shot.ID, Position: shot.Position}
 	if strings.TrimSpace(shot.CurrentRevisionID) == "" {
 		return result, "", false, BadAuthRequest("镜头缺少分镜版本")
@@ -135,10 +146,13 @@ func (s *Service) renderProjectShot(ctx context.Context, gateway *gatewayClient,
 	}
 	continueChain := strings.TrimSpace(previousLastFrame) != ""
 	params := map[string]any{}
+	if firstNonEmpty(strings.TrimSpace(revision.VideoPrompt), revision.PlotDescription) == "" && !req.Draft {
+		return result, "", false, BadAuthRequest("镜头缺少画面提示词")
+	}
 	if !continueChain && !req.Draft {
 		imagePrompt := strings.TrimSpace(revision.ImagePrompt)
 		if imagePrompt == "" {
-			return result, "", false, BadAuthRequest("首镜头缺少画面提示词，无法生成首帧")
+			return result, "", false, BadAuthRequest("镜头缺少画面提示词，无法生成首帧")
 		}
 		params["image"] = map[string]any{"prompt": imagePrompt}
 	}
@@ -149,6 +163,8 @@ func (s *Service) renderProjectShot(ctx context.Context, gateway *gatewayClient,
 	video := map[string]any{
 		"prompt":      firstNonEmpty(strings.TrimSpace(revision.VideoPrompt), revision.PlotDescription),
 		"first_frame": "auto",
+		// P0 定档：完整链走 quality（D 档，4.6× vs reference）；草稿另有 512x288 快路径
+		"profile": "quality",
 	}
 	if continueChain {
 		video["first_frame"] = previousLastFrame
@@ -160,6 +176,7 @@ func (s *Service) renderProjectShot(ctx context.Context, gateway *gatewayClient,
 		if firstNonEmpty(strings.TrimSpace(revision.VideoPrompt), revision.PlotDescription) == "" {
 			return result, "", false, BadAuthRequest("草稿镜头缺少画面提示词")
 		}
+		video["profile"] = "draft" // 覆盖上面误设的 quality（6步/internal，512x288 下无 internal）
 		// ponytail: 草稿固定 512x288，竖屏分寸需要按项目画幅细分时再查 project
 		video["width"], video["height"] = 512, 288
 		if !continueChain {
@@ -222,7 +239,7 @@ func (s *Service) renderProjectShot(ctx context.Context, gateway *gatewayClient,
 	result.VideoArtifactID = videoArtifact.ID
 	if result.LastFramePath != "" {
 		frameMetadata, _ := json.Marshal(map[string]string{"gatewayJobId": job.ID, "path": result.LastFramePath})
-		frameArtifact := &model.ShotArtifact{ID: newID(), ProjectID: projectID, UnitID: shot.UnitID, ShotID: shot.ID, RevisionID: shot.CurrentRevisionID, Type: "shot_last_frame", Status: "ready", Selected: true, MetadataJSON: string(frameMetadata), CreatedAt: now, UpdatedAt: now}
+		frameArtifact := &model.ShotArtifact{ID: newID(), ProjectID: projectID, UnitID: shot.UnitID, ShotID: shot.ID, RevisionID: shot.CurrentRevisionID, Type: "shot_last_frame", Status: "ready", Selected: !req.Draft, MetadataJSON: string(frameMetadata), CreatedAt: now, UpdatedAt: now}
 		if err := s.repo.CreateShotArtifact(frameArtifact); err != nil {
 			return result, "", voiceSkipped, err
 		}
