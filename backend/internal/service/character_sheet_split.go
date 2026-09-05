@@ -81,7 +81,7 @@ func splitCharacterSheetImage(src image.Image) ([]image.Image, bool) {
 	var panels []segment
 	cursor := 0
 	flushPanel := func(end int) {
-		if end-cursor >= sheetMinPanelWidth && height*10 >= (end-cursor)*11 {
+		if end-cursor >= sheetMinPanelWidth && height*10 >= (end-cursor)*9 {
 			panels = append(panels, segment{cursor, end})
 		}
 	}
@@ -103,7 +103,12 @@ func splitCharacterSheetImage(src image.Image) ([]image.Image, bool) {
 	return crops, true
 }
 
-// sheetBlankColumns 逐列采样计算相邻像素灰度差之和，接近匀色的列记为留白列。
+// sheetBlankColumns 判定「留白列」：整列均匀（相邻采样灰度差低）且满足其一——
+//   - 近白（亮度 ≥200 且色散小）：定妆拼图惯例的白/浅色分隔带；或
+//   - 接近四角一致背景色（深色/彩色底拼图，四角必然是背景）。
+//
+// 只用「列内梯度」不行：真实三视图整张都是平滑渐变，人物色块列与留白列
+// 梯度一样低，会把全部列误判为留白导致永不裁切。
 func sheetBlankColumns(src image.Image) []bool {
 	bounds := src.Bounds()
 	width, height := bounds.Dx(), bounds.Dy()
@@ -111,26 +116,76 @@ func sheetBlankColumns(src image.Image) []bool {
 	if step < 1 {
 		step = 1
 	}
+	// 四角各 8x8 的中位色：一致时才作为背景参考（格子顶边时四角各在人物里，不可靠）
+	var corners [4][3]int
+	ci := 0
+	for _, cx := range []int{bounds.Min.X, bounds.Max.X - 9} {
+		for _, cy := range []int{bounds.Min.Y, bounds.Max.Y - 9} {
+			var r, g, b int
+			for dy := 0; dy < 8; dy++ {
+				for dx := 0; dx < 8; dx++ {
+					pr, pg, pb, _ := src.At(cx+dx, cy+dy).RGBA()
+					r += int(pr >> 8)
+					g += int(pg >> 8)
+					b += int(pb >> 8)
+				}
+			}
+			corners[ci] = [3]int{r / 64, g / 64, b / 64}
+			ci++
+		}
+	}
+	cornersAgree := func(a, b [3]int) bool {
+		return abs(a[0]-b[0]) <= 24 && abs(a[1]-b[1]) <= 24 && abs(a[2]-b[2]) <= 24
+	}
+	hasBg := cornersAgree(corners[0], corners[1]) && cornersAgree(corners[1], corners[2]) &&
+		cornersAgree(corners[2], corners[3])
+	bg := corners[0]
+
 	blank := make([]bool, width)
 	for x := 0; x < width; x++ {
-		diffSum, pairs := 0, 0
+		samples, maxDiff, minLum, maxLum := 0, 0, 1<<30, 0
+		nearBg := true
 		prev := -1
 		for y := 0; y < height; y += step {
 			r, g, b, _ := src.At(bounds.Min.X+x, bounds.Min.Y+y).RGBA()
-			gray := int((r*299 + g*587 + b*114) / 1000 >> 8)
+			r8, g8, b8 := int(r>>8), int(g>>8), int(b>>8)
+			lum := (r8*299 + g8*587 + b8*114) / 1000
 			if prev >= 0 {
-				d := gray - prev
+				d := lum - prev
 				if d < 0 {
 					d = -d
 				}
-				diffSum += d
-				pairs++
+				if d > maxDiff {
+					maxDiff = d
+				}
 			}
-			prev = gray
+			if lum < minLum {
+				minLum = lum
+			}
+			if lum > maxLum {
+				maxLum = lum
+			}
+			if hasBg {
+				dr, dg, db := r8-bg[0], g8-bg[1], b8-bg[2]
+				if abs(dr) > 24 || abs(dg) > 24 || abs(db) > 24 {
+					nearBg = false
+				}
+			}
+			samples++
+			prev = lum
 		}
-		blank[x] = pairs > 0 && diffSum <= pairs*sheetBlankDiffPerPair
+		uniform := samples > 0 && maxDiff <= sheetBlankDiffPerPair
+		nearWhite := minLum >= 200 && maxLum-minLum <= 32
+		blank[x] = uniform && (nearWhite || (hasBg && nearBg))
 	}
 	return blank
+}
+
+func abs(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
 }
 
 // splitCharacterSheetReference 把一条 edit_source 参考替换为裁切后的前两格；
