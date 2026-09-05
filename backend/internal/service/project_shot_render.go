@@ -157,6 +157,9 @@ func (s *Service) renderProjectShot(ctx context.Context, gateway *gatewayClient,
 		video["seconds"] = seconds
 	}
 	if req.Draft {
+		if firstNonEmpty(strings.TrimSpace(revision.VideoPrompt), revision.PlotDescription) == "" {
+			return result, "", false, BadAuthRequest("草稿镜头缺少画面提示词")
+		}
 		// ponytail: 草稿固定 512x288，竖屏分寸需要按项目画幅细分时再查 project
 		video["width"], video["height"] = 512, 288
 		if !continueChain {
@@ -208,7 +211,11 @@ func (s *Service) renderProjectShot(ctx context.Context, gateway *gatewayClient,
 	if err != nil {
 		return result, "", voiceSkipped, err
 	}
-	videoArtifact := &model.ShotArtifact{ID: newID(), ProjectID: projectID, UnitID: shot.UnitID, ShotID: shot.ID, RevisionID: shot.CurrentRevisionID, Type: "video", Status: "ready", Selected: true, MetadataJSON: string(metadata), CreatedAt: now, UpdatedAt: now}
+	videoArtifact := &model.ShotArtifact{ID: newID(), ProjectID: projectID, UnitID: shot.UnitID, ShotID: shot.ID, RevisionID: shot.CurrentRevisionID, Type: "video", Status: "ready", Selected: !req.Draft, MetadataJSON: string(metadata), CreatedAt: now, UpdatedAt: now}
+	if req.Draft {
+		metadata, _ = json.Marshal(map[string]string{"gatewayJobId": job.ID, "videoPath": result.VideoPath, "lastFramePath": result.LastFramePath, "draft": "true"})
+		videoArtifact.MetadataJSON = string(metadata)
+	}
 	if err := s.repo.CreateShotArtifact(videoArtifact); err != nil {
 		return result, "", voiceSkipped, err
 	}
@@ -221,10 +228,12 @@ func (s *Service) renderProjectShot(ctx context.Context, gateway *gatewayClient,
 		}
 		result.LastFrameArtifactID = frameArtifact.ID
 	}
-	shot.Status = "completed"
-	shot.UpdatedAt = now
-	if err := s.repo.SaveShot(shot, false); err != nil {
-		return result, "", voiceSkipped, err
+	if !req.Draft { // 草稿不改镜头状态、不进正式产物链
+		shot.Status = "completed"
+		shot.UpdatedAt = now
+		if err := s.repo.SaveShot(shot, false); err != nil {
+			return result, "", voiceSkipped, err
+		}
 	}
 	return result, result.LastFramePath, voiceSkipped, nil
 }

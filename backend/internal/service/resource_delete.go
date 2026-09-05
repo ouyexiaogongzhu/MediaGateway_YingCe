@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"infinite-canvas/backend/internal/model"
+	"infinite-canvas/backend/internal/repository"
 
 	qiniuAuth "github.com/qiniu/go-sdk/v7/auth"
 	qiniuStorage "github.com/qiniu/go-sdk/v7/storage"
@@ -83,9 +84,11 @@ func (s *Service) deleteUserAssetWithResources(userID string, assetID string) er
 			}
 		}
 		for _, document := range snapshot.Documents {
-			referencedIDs := documentReferencedResourceIDs(document.PrimaryJSON, ownedIDSet)
-			for resourceID := range documentReferencedResourceIDs(document.SecondaryJSON, ownedIDSet) {
-				referencedIDs[resourceID] = struct{}{}
+			referencedIDs := map[string]struct{}{}
+			for _, raw := range documentReferenceJSONs(document) {
+				for resourceID := range documentReferencedResourceIDs(raw, ownedIDSet) {
+					referencedIDs[resourceID] = struct{}{}
+				}
 			}
 			if len(referencedIDs) > 0 {
 				if document.Kind == "素材" {
@@ -160,6 +163,20 @@ type resourceUsage struct {
 	Kind  string
 	ID    string
 	Title string
+}
+
+// documentReferenceJSONs 返回需要参与引用校验的 JSON 文本。
+// 任务的 result_json 与「任务结果」记录是本任务的生成产物，不是消费引用——
+// 产物不阻止资源删除；只有画布节点、任务输入等消费侧引用才阻止。
+func documentReferenceJSONs(document repository.ResourceReferenceDocument) []string {
+	switch document.Kind {
+	case "任务结果":
+		return nil
+	case "任务":
+		return []string{document.PrimaryJSON}
+	default:
+		return []string{document.PrimaryJSON, document.SecondaryJSON}
+	}
 }
 
 func resourceOccupiedMessage(usages []resourceUsage) string {

@@ -24,8 +24,11 @@ import { resolveStoryboardGenerationContext } from "@/lib/canvas/canvas-storyboa
 import { reconcileStoryboardTargetConnections, storyboardComposerContent, storyboardRowReferenceNodeIds } from "@/lib/canvas/canvas-storyboard-materializer";
 import { generationErrorMessage } from "@/lib/generation-error";
 import { navigateToSettings } from "@/lib/settings-navigation";
+import { uploadImage } from "@/services/image-storage";
+import { resourceIdFromStorageKey } from "@/services/api/resources";
+import { createStoryboardCompose, createStoryboardMusicBatch, createStoryboardVideoBatch, type StoryboardShotPayload } from "@/services/api/storyboard-batch";
 import type { Skill } from "@/services/api/skills";
-import { createGenerationTask, waitForGenerationTask } from "@/services/api/task-center";
+import { createGenerationTask, waitForGenerationTask, type GenerationTask } from "@/services/api/task-center";
 import { skillRuntime } from "@/services/skill-runtime";
 import { modelDisplayName, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import {
@@ -33,7 +36,10 @@ import {
     type CanvasConnection,
     type CanvasGenerationBatchMode,
     type CanvasNodeData,
+    type CanvasNodeMetadata,
+    type StoryboardMusicBatchState,
     type StoryboardRow,
+    type StoryboardVideoBatchState,
 } from "@/types/canvas";
 
 type UseCanvasStoryboardOptions = {
@@ -268,11 +274,37 @@ export function useCanvasStoryboard({
             return;
         }
         const activeNodeIds = activeGenerationBatchNodeIds(scriptNode, "storyboard_image");
+        const rowImageNode = (row: StoryboardRow) => (row.imageNodeId ? nodesRef.current.find((node) => node.id === row.imageNodeId && node.type === CanvasNodeType.Image) : undefined);
         const targetRows = rows.filter((row) => {
-            const imageNode = row.imageNodeId ? nodesRef.current.find((node) => node.id === row.imageNodeId && node.type === CanvasNodeType.Image) : undefined;
+            const imageNode = rowImageNode(row);
             return !imageNode?.metadata?.content && (!imageNode || !activeNodeIds.has(imageNode.id));
         });
-        if (!targetRows.length) return message.info("所选分镜图已生成或正在生成");
+        if (!targetRows.length) {
+            const busyRows = rows.filter((row) => {
+                const imageNode = rowImageNode(row);
+                return imageNode && activeNodeIds.has(imageNode.id);
+            });
+            if (busyRows.length === rows.length) return message.info("所选分镜图正在生成中");
+            // 全部已生成：提供「重新生成」入口（清空旧图重跑），否则没有任何重生成路径。
+            const redoRows = rows.filter((row) => !busyRows.includes(row));
+            const ok = await new Promise<boolean>((resolve) => {
+                modal.confirm({
+                    title: `重新生成 ${redoRows.length} 张分镜图？`,
+                    content: "所选镜头已有分镜图，确认后清空旧图并按当前提示词重新生成。",
+                    okText: "重新生成",
+                    cancelText: "取消",
+                    centered: true,
+                    onOk: () => resolve(true),
+                    onCancel: () => resolve(false),
+                });
+            });
+            if (!ok) return;
+            const redoNodeIds = new Set(redoRows.map((row) => row.imageNodeId).filter(Boolean) as string[]);
+            const cleared = nodesRef.current.map((node) => redoNodeIds.has(node.id) ? { ...node, metadata: { ...resetGenerationTaskMetadata(node.metadata), content: undefined } } : node);
+            nodesRef.current = cleared;
+            setNodes(cleared);
+            targetRows.push(...redoRows);
+        }
         if (!await confirmGenerationSubmission(targetRows.length, imageModel, "图片生成")) return;
         const targets = ensureScriptImageNodes(nodeId, targetRows.map((row) => row.id));
         if (enqueueGenerationBatch(nodeId, "storyboard_image", targets.map((target) => ({ rowId: target.row.id, nodeId: target.node.id })))) message.success("分镜图已加入生成队列");
@@ -437,11 +469,37 @@ export function useCanvasStoryboard({
             return;
         }
         const activeNodeIds = activeGenerationBatchNodeIds(scriptNode, "storyboard_video");
+        const rowVideoNode = (row: StoryboardRow) => (row.videoNodeId ? nodesRef.current.find((node) => node.id === row.videoNodeId && node.type === CanvasNodeType.Video) : undefined);
         const targetRows = readyRows.filter((row) => {
-            const videoNode = row.videoNodeId ? nodesRef.current.find((node) => node.id === row.videoNodeId && node.type === CanvasNodeType.Video) : undefined;
+            const videoNode = rowVideoNode(row);
             return !videoNode?.metadata?.content && (!videoNode || !activeNodeIds.has(videoNode.id));
         });
-        if (!targetRows.length) return message.info("所选镜头视频已生成或正在生成");
+        if (!targetRows.length) {
+            const busyRows = readyRows.filter((row) => {
+                const videoNode = rowVideoNode(row);
+                return videoNode && activeNodeIds.has(videoNode.id);
+            });
+            if (busyRows.length === readyRows.length) return message.info("所选镜头视频正在生成中");
+            // 全部已生成：提供「重新生成」入口（清空旧视频重跑），否则没有任何重生成路径。
+            const redoRows = readyRows.filter((row) => !busyRows.includes(row));
+            const ok = await new Promise<boolean>((resolve) => {
+                modal.confirm({
+                    title: `重新生成 ${redoRows.length} 段视频？`,
+                    content: "所选镜头已有视频，确认后清空旧视频并按当前提示词重新生成。",
+                    okText: "重新生成",
+                    cancelText: "取消",
+                    centered: true,
+                    onOk: () => resolve(true),
+                    onCancel: () => resolve(false),
+                });
+            });
+            if (!ok) return;
+            const redoNodeIds = new Set(redoRows.map((row) => row.videoNodeId).filter(Boolean) as string[]);
+            const cleared = nodesRef.current.map((node) => redoNodeIds.has(node.id) ? { ...node, metadata: { ...resetGenerationTaskMetadata(node.metadata), content: undefined } } : node);
+            nodesRef.current = cleared;
+            setNodes(cleared);
+            targetRows.push(...redoRows);
+        }
         if (!await confirmGenerationSubmission(targetRows.length, videoModel, "视频生成")) return;
         createScriptVideoNodes(nodeId, true, targetRows.map((row) => row.id));
         scriptNode = nodesRef.current.find((node) => node.id === nodeId && node.type === CanvasNodeType.Script);
@@ -479,8 +537,112 @@ export function useCanvasStoryboard({
         if (enqueueGenerationBatch(nodeId, "storyboard_video", targets.map((target) => ({ rowId: target.row.id, nodeId: target.node.id })))) message.success("镜头视频已加入生成队列");
     }, [connectionsRef, confirmGenerationSubmission, createScriptVideoNodes, effectiveConfig, enqueueGenerationBatch, isAiConfigReady, message, nodesRef, setConnections, setNodes]);
 
+    const patchStoryboardMetadata = useCallback((nodeId: string, patch: Partial<CanvasNodeMetadata>) => {
+        setNodes((current) => current.map((node) => node.id === nodeId ? { ...node, metadata: { ...node.metadata, ...patch } } : node));
+    }, [setNodes]);
+
+    const storyboardBatchRows = useCallback((nodeId: string) => {
+        const scriptNode = nodesRef.current.find((node) => node.id === nodeId && node.type === CanvasNodeType.Script);
+        return [...(scriptNode?.metadata?.storyboard?.rows || [])].sort((a, b) => a.shotNumber - b.shotNumber);
+    }, [nodesRef]);
+
+    const generateStoryboardVideoBatch = useCallback(async (nodeId: string) => {
+        const rows = storyboardBatchRows(nodeId);
+        if (!rows.length) return message.warning("请先生成分镜表");
+        patchStoryboardMetadata(nodeId, { storyboardVideoBatch: { taskId: "", status: "running", stage: "正在收集首帧", progress: 2, rows: {} } });
+        try {
+            const firstFrameResourceIds: Record<string, string> = {};
+            for (const row of rows) {
+                const imageNode = row.imageNodeId ? nodesRef.current.find((node) => node.id === row.imageNodeId && node.type === CanvasNodeType.Image) : undefined;
+                const resourceId = await storyboardFirstFrameResourceId(imageNode?.metadata?.content);
+                if (!resourceId) continue;
+                firstFrameResourceIds[String(row.shotNumber)] = resourceId;
+            }
+            const task = await createStoryboardVideoBatch({ projectId, rows: rows.map(storyboardShotPayload), firstFrameResourceIds });
+            patchStoryboardMetadata(nodeId, { storyboardVideoBatch: { taskId: task.id, status: "running", stage: task.stage, progress: task.progress, rows: {} } });
+            const completed = await waitForGenerationTask(task.id, {
+                initialTask: task,
+                // 默认 storyboard 轮询超时 13 分钟，行级视频批量可能远超，给足 60 分钟。
+                timeoutMs: 60 * 60 * 1000,
+                onTaskUpdate: (next) => patchStoryboardMetadata(nodeId, { storyboardVideoBatch: { taskId: next.id, status: next.status === "succeeded" ? "succeeded" : next.status === "queued" ? "queued" : "running", stage: next.stage, progress: next.progress, rows: {} } }),
+            });
+            const state = storyboardVideoBatchState(completed, rows);
+            patchStoryboardMetadata(nodeId, { storyboardVideoBatch: state });
+            const succeeded = Object.values(state.rows).filter((row) => row.status === "succeeded").length;
+            if (state.status === "succeeded") message.success(`一键视频完成：成功 ${succeeded}/${rows.length}`);
+            else message.error(state.error || "一键视频任务失败");
+        } catch (error) {
+            const details = generationErrorMessage(error);
+            patchStoryboardMetadata(nodeId, { storyboardVideoBatch: { taskId: "", status: "failed", error: details, rows: {} } });
+            message.error(details);
+        }
+    }, [message, nodesRef, patchStoryboardMetadata, projectId, storyboardBatchRows]);
+
+    const generateStoryboardMusicBatch = useCallback(async (nodeId: string) => {
+        const rows = storyboardBatchRows(nodeId);
+        if (!rows.length) return message.warning("请先生成分镜表");
+        patchStoryboardMetadata(nodeId, { storyboardMusicBatch: { taskId: "", status: "running", stage: "正在创建任务", progress: 2, segments: [] } });
+        try {
+            const task = await createStoryboardMusicBatch({ projectId, rows: rows.map(storyboardShotPayload) });
+            patchStoryboardMetadata(nodeId, { storyboardMusicBatch: { taskId: task.id, status: "running", stage: task.stage, progress: task.progress, segments: [] } });
+            const completed = await waitForGenerationTask(task.id, {
+                initialTask: task,
+                onTaskUpdate: (next) => patchStoryboardMetadata(nodeId, { storyboardMusicBatch: { taskId: next.id, status: next.status === "succeeded" ? "succeeded" : next.status === "queued" ? "queued" : "running", stage: next.stage, progress: next.progress, segments: [] } }),
+            });
+            const segments = storyboardMusicSegments(completed);
+            const status = completed.status === "succeeded" ? "succeeded" : "failed";
+            patchStoryboardMetadata(nodeId, { storyboardMusicBatch: { taskId: completed.id, status, progress: 100, stage: completed.stage, segments } });
+            if (status === "succeeded") message.success(`一键音乐完成：${segments.length} 段配乐`);
+            else message.error("一键音乐任务失败");
+        } catch (error) {
+            const details = generationErrorMessage(error);
+            patchStoryboardMetadata(nodeId, { storyboardMusicBatch: { taskId: "", status: "failed", error: details, segments: [] } });
+            message.error(details);
+        }
+    }, [message, patchStoryboardMetadata, projectId, storyboardBatchRows]);
+
+    const composeStoryboard = useCallback(async (nodeId: string) => {
+        const scriptNode = nodesRef.current.find((node) => node.id === nodeId && node.type === CanvasNodeType.Script);
+        const rows = storyboardBatchRows(nodeId);
+        const videoBatch = scriptNode?.metadata?.storyboardVideoBatch;
+        const musicBatch = scriptNode?.metadata?.storyboardMusicBatch;
+        if (!scriptNode || rows.length < 2) return message.warning("合成至少需要两个镜头");
+        const missing = rows.filter((row) => !videoBatch?.rows[row.id]?.videoResourceId);
+        if (missing.length) return message.warning(`有 ${missing.length} 个镜头还没有视频，请先一键生成视频`);
+        const musicResourceIds = storyboardMusicResourceIds(rows, musicBatch?.segments || []);
+        const missingGroups = storyboardMusicGroupIds(rows).filter((groupId) => !musicResourceIds[groupId]);
+        if (missingGroups.length) return message.warning(`音乐段 ${missingGroups.join("、")} 还未生成，请先一键生成音乐`);
+        patchStoryboardMetadata(nodeId, { storyboardCompose: { taskId: "", status: "running", stage: "正在创建任务", progress: 2 } });
+        try {
+            const videoResourceIds: Record<string, string> = {};
+            rows.forEach((row, index) => {
+                const resourceId = videoBatch?.rows[row.id]?.videoResourceId;
+                if (resourceId) videoResourceIds[String(index + 1)] = resourceId;
+            });
+            const task = await createStoryboardCompose({ projectId, rows: rows.map(storyboardShotPayload), videoResourceIds, musicResourceIds });
+            patchStoryboardMetadata(nodeId, { storyboardCompose: { taskId: task.id, status: "running", stage: task.stage, progress: task.progress } });
+            const completed = await waitForGenerationTask(task.id, {
+                initialTask: task,
+                onTaskUpdate: (next) => patchStoryboardMetadata(nodeId, { storyboardCompose: { taskId: next.id, status: next.status === "succeeded" ? "succeeded" : next.status === "queued" ? "queued" : "running", stage: next.stage, progress: next.progress } }),
+            });
+            const result = JSON.parse(completed.resultJson || "{}") as { videoResourceId?: string; videoResourceUrl?: string };
+            if (completed.status === "succeeded" && result.videoResourceId) {
+                patchStoryboardMetadata(nodeId, { storyboardCompose: { taskId: completed.id, status: "succeeded", progress: 100, videoResourceId: result.videoResourceId, videoResourceUrl: result.videoResourceUrl } });
+                message.success(`合成完成，成片已进入资源库（${result.videoResourceId}）`);
+            } else {
+                patchStoryboardMetadata(nodeId, { storyboardCompose: { taskId: completed.id, status: "failed", error: completed.error || "合成任务失败" } });
+                message.error(completed.error || "合成任务失败");
+            }
+        } catch (error) {
+            const details = generationErrorMessage(error);
+            patchStoryboardMetadata(nodeId, { storyboardCompose: { taskId: "", status: "failed", error: details } });
+            message.error(details);
+        }
+    }, [message, nodesRef, patchStoryboardMetadata, projectId, storyboardBatchRows]);
+
     return {
         addScriptRow,
+        composeStoryboard,
         createAndGenerateScriptVideos,
         createScriptActionBoards,
         createScriptImageNodes,
@@ -488,11 +650,86 @@ export function useCanvasStoryboard({
         generateScriptImages,
         generateScriptRows,
         generateScriptVideos,
+        generateStoryboardMusicBatch,
+        generateStoryboardVideoBatch,
         removeScriptRow,
         replaceScriptRows,
         updateScriptRow,
         updateScriptRows,
     };
+}
+
+// 后端 storyboard 行以数组下标当 shotNumber，行状态按 rowId 落盘以免行号漂移错位。
+function storyboardShotPayload(row: StoryboardRow): StoryboardShotPayload {
+    return {
+        description: row.plotDescription,
+        durationSeconds: Math.max(1, Math.round(Number(row.durationSeconds) || 6)),
+        dialogue: row.dialogue,
+        shotSize: row.shotSize,
+        emotion: row.emotion,
+        lightingAndAtmosphere: row.lightingAndAtmosphere,
+        audioEffects: row.audioEffects,
+        voiceMode: row.voiceMode,
+        sfxTags: row.sfxTags,
+        musicGroupId: row.musicGroupId,
+        musicMood: row.musicMood,
+        visualPrompt: row.imageGenerationPrompt,
+        videoPrompt: row.videoMotionPrompt,
+        camera: row.camera,
+        motion: row.motion,
+        timeBeats: row.timeBeats,
+        negativePrompt: row.negativePrompt,
+        narrativeIntent: row.narrativeIntent,
+        viewerPOV: row.viewerPOV,
+        performanceBlocking: row.performanceBlocking,
+        mustHave: row.mustHave,
+        optionalDetails: row.optionalDetails,
+        continuityOut: row.continuityOut,
+        characterIds: (row.characters || []).map((item) => item.characterAssetId).filter((value): value is string => Boolean(value)),
+    };
+}
+
+function storyboardMusicGroupIds(rows: StoryboardRow[]) {
+    return Array.from(new Set(rows.map((row) => row.musicGroupId?.trim() || "seg-01")));
+}
+
+function storyboardMusicResourceIds(rows: StoryboardRow[], segments: StoryboardMusicBatchState["segments"]) {
+    return Object.fromEntries(storyboardMusicGroupIds(rows).flatMap((groupId) => {
+        const segment = segments.find((item) => item.musicGroupId === groupId && item.resourceId);
+        return segment ? [[groupId, segment.resourceId]] : [];
+    }));
+}
+
+function storyboardVideoBatchState(task: GenerationTask, rows: StoryboardRow[]): StoryboardVideoBatchState {
+    const parsed = JSON.parse(task.resultJson || "{}") as { rows?: Array<{ shotNumber: number; status: string; error?: string; videoResourceId?: string }> };
+    const resultByShotNumber = new Map((parsed.rows || []).map((item) => [item.shotNumber, item]));
+    const rowStates: StoryboardVideoBatchState["rows"] = {};
+    rows.forEach((row) => {
+        const result = resultByShotNumber.get(row.shotNumber);
+        if (!result) return;
+        rowStates[row.id] = { status: result.status, error: result.error, videoResourceId: result.videoResourceId };
+    });
+    return {
+        taskId: task.id,
+        status: task.status === "succeeded" ? "succeeded" : task.status === "queued" ? "queued" : "failed",
+        error: task.error,
+        progress: 100,
+        rows: rowStates,
+    };
+}
+
+function storyboardMusicSegments(task: GenerationTask): StoryboardMusicBatchState["segments"] {
+    const parsed = JSON.parse(task.resultJson || "{}") as { segments?: StoryboardMusicBatchState["segments"] };
+    return parsed.segments || [];
+}
+
+// 首帧图 content 可能是 resource: 存储键、资源文件 URL 或 data/远程 URL；后两种先补传到资源库。
+async function storyboardFirstFrameResourceId(content: string | undefined) {
+    if (!content) return "";
+    const direct = resourceIdFromStorageKey(content) || content.match(/\/resources\/([^/?#]+)\/file/)?.[1] || "";
+    if (direct) return direct;
+    const uploaded = await uploadImage(content);
+    return resourceIdFromStorageKey(uploaded.storageKey);
 }
 
 function invalidateEditedPromptVariables(previous: StoryboardRow | undefined, next: StoryboardRow) {

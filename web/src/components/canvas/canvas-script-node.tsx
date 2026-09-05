@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, use
 import { Button, Checkbox, Dropdown, Input, InputNumber, Modal, Segmented, Select, Table, Tooltip } from "antd";
 import type { MenuProps } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { ChevronDown, ChevronUp, Clapperboard, Copy, Expand, Film, Grid3X3, Image as ImageIcon, ListTree, Merge, MoreHorizontal, Plus, RefreshCw, Send, Square, Trash2, Video } from "lucide-react";
+import { ChevronDown, ChevronUp, Clapperboard, Copy, Expand, Film, Grid3X3, Image as ImageIcon, ListTree, Merge, MoreHorizontal, Music, Plus, RefreshCw, Send, Square, Trash2, Video } from "lucide-react";
 
 import { CanvasResourceMentionTextarea } from "@/components/canvas/canvas-resource-mention-textarea";
 import { StoryboardAssetsCell } from "@/components/canvas/storyboard-assets-cell";
@@ -25,9 +25,12 @@ import type {
     CanvasNodeStatus,
     CanvasWorkspaceMode,
     StoryboardColumn,
+    StoryboardComposeState,
+    StoryboardMusicBatchState,
     StoryboardRow,
     StoryboardShotCount,
     StoryboardShotDuration,
+    StoryboardVideoBatchState,
     StoryboardVideoInputMode,
 } from "@/types/canvas";
 import type { TaskStatus } from "@/services/api/task-center";
@@ -606,6 +609,12 @@ export function CanvasScriptEditor({
     onGenerateImages,
     onGenerateVideos,
     onVideoInputModeChange,
+    videoBatch,
+    musicBatch,
+    compose,
+    onGenerateVideoBatch,
+    onGenerateMusicBatch,
+    onCompose,
 }: {
     node: CanvasNodeData | null;
     nodes: CanvasNodeData[];
@@ -616,6 +625,12 @@ export function CanvasScriptEditor({
     onGenerateImages: (rowIds: string[]) => void;
     onGenerateVideos: (rowIds: string[]) => void;
     onVideoInputModeChange: (mode: StoryboardVideoInputMode) => void;
+    videoBatch?: StoryboardVideoBatchState;
+    musicBatch?: StoryboardMusicBatchState;
+    compose?: StoryboardComposeState;
+    onGenerateVideoBatch: () => void;
+    onGenerateMusicBatch: () => void;
+    onCompose: () => void;
 }) {
     const [query, setQuery] = useState("");
     const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -623,6 +638,21 @@ export function CanvasScriptEditor({
     const visibleColumns = resolveStoryboardVisibleColumns(node?.metadata?.storyboard?.visibleColumns);
     const videoInputMode = node?.metadata?.storyboardVideoInputMode || "direct";
     const nodeById = useMemo(() => new Map(nodes.map((item) => [item.id, item])), [nodes]);
+    const batchBusy = [videoBatch, musicBatch, compose].some((state) => state?.status === "running" || state?.status === "queued");
+    const videoBatchRunning = videoBatch?.status === "running" || videoBatch?.status === "queued";
+    const musicBatchRunning = musicBatch?.status === "running" || musicBatch?.status === "queued";
+    const composeRunning = compose?.status === "running" || compose?.status === "queued";
+    const requiredMusicGroups = useMemo(() => Array.from(new Set(rows.map((row) => row.musicGroupId?.trim() || "seg-01"))), [rows]);
+    const missingMusicGroups = requiredMusicGroups.filter((groupId) => !(musicBatch?.segments || []).some((segment) => segment.musicGroupId === groupId && segment.resourceId));
+    const missingVideoRows = rows.filter((row) => !videoBatch?.rows[row.id]?.videoResourceId).length;
+    const composeReady = rows.length >= 2 && !missingVideoRows && !missingMusicGroups.length;
+    const composeTooltip = rows.length < 2
+        ? "合成至少需要两个镜头"
+        : missingVideoRows
+          ? `${missingVideoRows} 个镜头还没有视频，请先一键生成视频`
+          : missingMusicGroups.length
+            ? `音乐段 ${missingMusicGroups.join("、")} 还未生成，请先一键生成音乐`
+            : "将镜头视频按顺序拼接并铺上配乐";
     const filteredRows = useMemo(() => {
         const keyword = query.trim().toLowerCase();
         return keyword
@@ -691,6 +721,14 @@ export function CanvasScriptEditor({
                 ),
         }));
     columns.push({
+        title: "视频状态",
+        key: "videoBatchState",
+        dataIndex: "shotNumber",
+        width: 110,
+        fixed: "right" as const,
+        render: (_: unknown, row: StoryboardRow) => <StoryboardVideoStateCell row={row} videoBatch={videoBatch} />,
+    });
+    columns.push({
         title: "操作",
         key: "actions",
         dataIndex: "shotNumber",
@@ -737,6 +775,19 @@ export function CanvasScriptEditor({
                 <Button type="primary" icon={<Film className="size-4" />} disabled={!selectedIds.length} onClick={() => onGenerateVideos(selectedIds)}>
                     {videoInputMode === "keyframe" ? "确认首帧并生成" : "生成视频"}
                 </Button>
+                <Button icon={<Video className="size-4" />} disabled={!rows.length || batchBusy} loading={videoBatchRunning} onClick={onGenerateVideoBatch}>
+                    {videoBatchRunning ? `视频 ${videoBatch?.progress ?? 0}%` : "一键生成视频"}
+                </Button>
+                <Button icon={<Music className="size-4" />} disabled={!rows.length || batchBusy} loading={musicBatchRunning} onClick={onGenerateMusicBatch}>
+                    {musicBatchRunning ? `音乐 ${musicBatch?.progress ?? 0}%` : "一键生成音乐"}
+                </Button>
+                <Tooltip title={composeTooltip}>
+                    <span className="inline-flex">
+                        <Button type="primary" icon={<Clapperboard className="size-4" />} disabled={!composeReady || batchBusy} loading={composeRunning} onClick={onCompose}>
+                            合成成片
+                        </Button>
+                    </span>
+                </Tooltip>
             </div>
             <Table<StoryboardRow>
                 rowKey="id"
@@ -751,6 +802,24 @@ export function CanvasScriptEditor({
             />
         </Modal>
     );
+}
+
+function StoryboardVideoStateCell({ row, videoBatch }: { row: StoryboardRow; videoBatch?: StoryboardVideoBatchState }) {
+    const state = videoBatch?.rows[row.id];
+    if (state?.status === "succeeded") {
+        return state.videoResourceId ? <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400">完成</span> : <span className="text-xs text-foreground/45">未入资源库</span>;
+    }
+    if (state?.status === "failed" || state?.status === "cancelled") {
+        return (
+            <Tooltip title={state.error || "生成失败"}>
+                <span className="cursor-help text-xs font-medium text-red-500">{state.status === "cancelled" ? "已停止" : "失败"}</span>
+            </Tooltip>
+        );
+    }
+    if (videoBatch?.status === "running" || videoBatch?.status === "queued") {
+        return <span className="text-xs text-foreground/60">生成中 {videoBatch.progress ?? 0}%</span>;
+    }
+    return <span className="text-xs text-foreground/35">未开始</span>;
 }
 
 function CompactInput({ value, placeholder, borderColor, onChange }: { value: string; placeholder: string; borderColor: string; onChange: (value: string) => void }) {

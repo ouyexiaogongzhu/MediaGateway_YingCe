@@ -197,6 +197,60 @@ func TestDeleteAssetKeepsResourceSharedByIndependentAsset(t *testing.T) {
 	}
 }
 
+func TestDeleteAssetAllowsTaskGeneratedResultResource(t *testing.T) {
+	svc, db, _ := newResourceDeletionTestService(t)
+	resource := model.Resource{ID: "resource-taskgen", UserID: "user-1", Provider: "local", ObjectKey: "users/user-1/image/taskgen.png", Status: model.ResourceStatusReady}
+	asset := model.Asset{ID: "asset-taskgen", UserID: "user-1", Title: "任务生成图", PayloadJSON: `{"data":{"storageKey":"resource:resource-taskgen"}}`}
+	task := model.Task{
+		ID: "task-gen", UserID: "user-1", Prompt: "9:16竖版，15秒，真人写实短视频",
+		InputJSON: `{}`, ResultJSON: `{"images":[{"dataUrl":"/api/resources/resource-taskgen/file","resourceId":"resource-taskgen"}]}`,
+	}
+	for _, item := range []any{&resource, &asset, &task} {
+		if err := db.Create(item).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// 资源只是任务的生成产物：删除素材必须放行
+	if err := svc.DeleteUserAsset("user-1", asset.ID); err != nil {
+		t.Fatalf("DeleteUserAsset() error = %v", err)
+	}
+	var resourceCount int64
+	if err := db.Model(&model.Resource{}).Where("id = ?", resource.ID).Count(&resourceCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if resourceCount != 0 {
+		t.Fatal("task-generated resource was not deleted")
+	}
+}
+
+func TestDeleteAssetStillRejectsTaskInputReference(t *testing.T) {
+	svc, db, _ := newResourceDeletionTestService(t)
+	resource := model.Resource{ID: "resource-taskin", UserID: "user-1", Provider: "local", ObjectKey: "users/user-1/image/taskin.png", Status: model.ResourceStatusReady}
+	asset := model.Asset{ID: "asset-taskin", UserID: "user-1", Title: "被任务引用的素材", PayloadJSON: `{"data":{"storageKey":"resource:resource-taskin"}}`}
+	task := model.Task{
+		ID: "task-input", UserID: "user-1", Prompt: "以这张图为参考生成视频",
+		InputJSON: `{"referenceResourceIds":["resource-taskin"]}`, ResultJSON: `{}`,
+	}
+	for _, item := range []any{&resource, &asset, &task} {
+		if err := db.Create(item).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	err := svc.DeleteUserAsset("user-1", asset.ID)
+	if err == nil || !strings.Contains(err.Error(), "任务「以这张图为参考生成视频」") {
+		t.Fatalf("DeleteUserAsset() error = %v, want task input reference block", err)
+	}
+	var resourceCount int64
+	if err := db.Model(&model.Resource{}).Where("id = ?", resource.ID).Count(&resourceCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if resourceCount != 1 {
+		t.Fatal("blocked delete removed the referenced resource")
+	}
+}
+
 func TestDeleteAssetStillRejectsLiveCanvasResourceReference(t *testing.T) {
 	svc, db, _ := newResourceDeletionTestService(t)
 	resource := model.Resource{ID: "resource-canvas", UserID: "user-1", Provider: "local", ObjectKey: "users/user-1/image/canvas.png", Status: model.ResourceStatusReady}

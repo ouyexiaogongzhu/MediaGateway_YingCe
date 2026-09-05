@@ -348,7 +348,7 @@ export default function WorkflowProductionWorkbench(props: Props) {
                     : { musicPrompt: "电影氛围配乐，贴合画面情绪" });
                 if (activeShotIdRef.current === submittingShot.id) setEditorDirty(false);
                 await onRefresh();
-                message.success(`镜头视频已生成${rendered.videoPath ? "" : "（产物同步中）"}`);
+                message.success("镜头视频已生成");
                 return;
             }
             const config = { ...generationConfig, videoSeconds: String(Math.max(1, Math.round(values.durationSeconds))) };
@@ -558,7 +558,7 @@ export default function WorkflowProductionWorkbench(props: Props) {
                         </div>
                         <footer className="workflow-editor-actions">
                             <div className="workflow-generation-cost" aria-live="polite">
-                                {creditsEnabled && formattedGenerationCredits ? <><CreditSymbol /><span>本次预计 {formattedGenerationCredits} 积分</span></> : creditsEnabled && routedModel ? <span>本次费用将在提交时按实际规格计算</span> : null}
+                                {creditsEnabled && generationCapability !== "video" && formattedGenerationCredits ? <><CreditSymbol /><span>本次预计 {formattedGenerationCredits} 积分</span></> : creditsEnabled && generationCapability !== "video" && routedModel ? <span>本次费用将在提交时按实际规格计算</span> : creditsEnabled && generationCapability === "video" ? <span>本地渲染，不计积分</span> : null}
                             </div>
                             <div className="flex items-center gap-2"><Button danger icon={<Trash2 className="size-4" />} loading={deleteShot.isPending} disabled={saveShot.isPending || selectedShotSubmitting || changeAssetBinding.isPending} onClick={requestDeleteShot}>删除镜头</Button><Button htmlType="submit" icon={<Save className="size-4" />} loading={saveShot.isPending} disabled={!editorDirty || deleteShot.isPending}>保存脚本</Button>{activeStage === "video" && <Button loading={selectedShotSubmitting} disabled={deleteShot.isPending} onClick={() => void generateArtifact(true)}>生成草稿</Button>}<Button type="primary" icon={<Play className="size-4" />} loading={selectedShotSubmitting || shotTask?.status === "queued" || shotTask?.status === "running"} disabled={deleteShot.isPending} onClick={() => void generateArtifact()}>{selectedShotSubmitting ? `${stageCopy.action}（正在提交）` : shotTask?.status === "queued" || shotTask?.status === "running" ? `${stageCopy.action}（已运行${shotTaskElapsed}）` : shotTask?.status === "failed" ? `${stageCopy.action}（上次失败，可重试）` : shotTask?.status === "succeeded" && !newestArtifact ? `${stageCopy.action}（已完成，正在同步）` : newestArtifact ? `${stageCopy.action}（已生成）` : stageCopy.action}</Button></div>
                         </footer>

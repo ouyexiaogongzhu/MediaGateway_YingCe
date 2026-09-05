@@ -279,8 +279,12 @@ func queryProviderCancellation(ctx context.Context, config providerConfig, provi
 		status := strings.ToLower(strings.TrimSpace(stringField(state, "status")))
 		switch status {
 		case "failed":
-			// MediaGateway 把已取消的任务呈现为 failed
-			return providerCancellationConfirmed, "cancelled", nil
+			// MediaGateway 把已取消的任务呈现为 failed（error="cancelled"），
+			// 但 worker 真实崩溃也是 failed —— 按 error 内容区分，避免误退款
+			if strings.Contains(strings.ToLower(stringField(state, "error")), "cancel") {
+				return providerCancellationConfirmed, "cancelled", nil
+			}
+			return providerCancellationFailed, "failed", nil
 		case "completed":
 			return providerCancellationSucceeded, "succeeded", nil
 		default:

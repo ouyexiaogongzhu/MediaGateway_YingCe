@@ -139,7 +139,7 @@ const storyboardPlanJSONSchema = `{
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["title", "description", "durationSeconds", "dialogue", "characterIds", "narrativeIntent", "viewerPOV", "performanceBlocking", "shotSize", "emotion", "lightingAndAtmosphere", "audioEffects", "visualPrompt", "videoPrompt", "camera", "motion", "timeBeats", "mustHave", "optionalDetails", "continuityOut", "negativePrompt", "assetRefs"],
+        "required": ["title", "description", "durationSeconds", "dialogue", "characterIds", "narrativeIntent", "viewerPOV", "performanceBlocking", "shotSize", "emotion", "lightingAndAtmosphere", "audioEffects", "voiceMode", "sfxTags", "musicGroupId", "musicMood", "visualPrompt", "videoPrompt", "camera", "motion", "timeBeats", "mustHave", "optionalDetails", "continuityOut", "negativePrompt", "assetRefs"],
         "properties": {
           "title": {"type": "string"},
           "description": {"type": "string"},
@@ -153,6 +153,10 @@ const storyboardPlanJSONSchema = `{
           "emotion": {"type": "string"},
           "lightingAndAtmosphere": {"type": "string"},
           "audioEffects": {"type": "string"},
+          "voiceMode": {"type": "string", "enum": ["dialogue", "voiceover"], "description": "dialogue=画面中角色开口说出台词；voiceover=画外旁白/内心独白"},
+          "sfxTags": {"type": "array", "maxItems": 3, "description": "只能从冻结音效词表中选择 0-3 个最贴合画面声音的标签，禁止编造词表外的标签", "items": {"type": "string", "enum": ["ambience_wind", "ambience_rain", "ambience_snow", "ambience_fire", "ambience_water", "ambience_forest", "ambience_night", "ambience_crowd", "ambience_city", "ambience_room", "footsteps_grass", "footsteps_gravel", "footsteps_wood", "footsteps_stone", "footsteps_snow", "footsteps_water", "door_open", "door_close", "door_knock", "cloth", "body_fall", "punch", "sword_clash", "sword_draw", "arrow", "explosion", "fire_crackle", "water_splash", "thunder", "impact", "magic_cast", "magic_hit", "whoosh", "riser", "ice_crack", "crystal", "horse", "cart", "bell", "gong"]}},
+          "musicGroupId": {"type": "string", "description": "把情绪/节奏连续的相邻行归入同一配乐组，如 seg-01；情绪转折时换新组并递增编号"},
+          "musicMood": {"type": "string", "description": "本行所属配乐段的音乐情绪，中文不超过 20 字；同组行情绪一致或渐变"},
           "visualPrompt": {"type": "string"},
           "videoPrompt": {"type": "string"},
           "camera": {"type": "string"},
@@ -243,6 +247,9 @@ func storyboardExecutionContract(durationRule string, countRule string) string {
 - ` + countRule + `
 - 单镜头最多 2 名主要角色、1 个主运镜、1 条主要动作链、3 个 timeBeats 和 3 个 mustHave；超限必须拆镜或在固定镜头数内重新分配。
 - dialogue 只写本镜头实际念出的台词或简短旁白，字数上限按 1 秒最多约 5 个中文字符计算（至少 24 字）；超长台词/旁白必须拆镜或精简，不得用 dialogue 承载长段叙述。
+- voiceMode 判断标准：台词由画面中的角色开口说出时填 "dialogue"；台词是画外旁白或内心独白时填 "voiceover"。dialogue 非空时必须给出 voiceMode；dialogue 为空时 voiceMode 填 "dialogue"（服务端以 dialogue 为空判断本镜头无声）。
+- sfxTags 只能从冻结音效词表中选择 0-3 个最贴合本镜头画面声音的标签，禁止编造词表外的标签。词表：ambience_wind ambience_rain ambience_snow ambience_fire ambience_water ambience_forest ambience_night ambience_crowd ambience_city ambience_room footsteps_grass footsteps_gravel footsteps_wood footsteps_stone footsteps_snow footsteps_water door_open door_close door_knock cloth body_fall punch sword_clash sword_draw arrow explosion fire_crackle water_splash thunder impact magic_cast magic_hit whoosh riser ice_crack crystal horse cart bell gong。
+- musicGroupId 把情绪/节奏连续的相邻行归入同一配乐组（如 "seg-01"），情绪转折时换新组并递增编号；musicMood 写本组音乐情绪，中文不超过 20 字（如"低沉压抑，弦乐渐强"），同组行 mood 应一致或渐变。
 - characterIds 优先填写当前角色版本中的 assetId；角色只有名称、尚未确认资产时填写角色名称，服务端会保留名称引用。不要编造 ID；没有角色时返回空数组。
 - assetRefs 只能引用当前画布资产中的 nodeId；不要根据相似名称编造 ID。每镜最多 6 个，priority 越大表示越重要。
 - styleGuide 最多 120 个中文字符；visualPrompt 只描述首帧，videoPrompt 只描述运动和结尾状态。

@@ -73,8 +73,13 @@ type agentStoryboardShot struct {
 	Emotion         string               `json:"emotion"`
 	Lighting        string               `json:"lightingAndAtmosphere"`
 	AudioEffects    string               `json:"audioEffects"`
+	VoiceMode       string               `json:"voiceMode,omitempty"`
+	SfxTags         []string             `json:"sfxTags,omitempty"`
+	MusicGroupID    string               `json:"musicGroupId,omitempty"`
+	MusicMood       string               `json:"musicMood,omitempty"`
 	VisualPrompt    string               `json:"visualPrompt"`
 	VideoPrompt     string               `json:"videoPrompt"`
+	VideoMotionPrompt string             `json:"videoMotionPrompt,omitempty"`
 	Camera          string               `json:"camera"`
 	Motion          string               `json:"motion"`
 	TimeBeats       string               `json:"timeBeats"`

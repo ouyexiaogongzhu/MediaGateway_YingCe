@@ -223,11 +223,11 @@ func taskExecutionTimeoutWithPolicy(taskType string, policy RuntimeTaskPolicy) t
 	switch {
 	case taskType == "agent_storyboard" || taskType == "agent_storyboard_rows":
 		return time.Duration(policy.StoryboardTimeoutMinutes) * time.Minute
-	case strings.HasPrefix(taskType, "canvas_video") || strings.HasPrefix(taskType, "video_"):
+	case strings.HasPrefix(taskType, "canvas_video") || strings.HasPrefix(taskType, "video_") || taskType == storyboardRowVideoTaskType || taskType == storyboardVideoBatchTaskType || taskType == storyboardComposeTaskType:
 		return max(time.Duration(policy.VideoTimeoutMinutes)*time.Minute, 5*time.Minute)
 	case strings.HasPrefix(taskType, "canvas_image"):
 		return time.Duration(policy.ImageTimeoutMinutes) * time.Minute
-	case strings.HasPrefix(taskType, "canvas_audio"):
+	case strings.HasPrefix(taskType, "canvas_audio") || taskType == storyboardMusicBatchTaskType:
 		return time.Duration(policy.AudioTimeoutMinutes) * time.Minute
 	case strings.HasPrefix(taskType, "canvas_text"):
 		return time.Duration(policy.TextTimeoutMinutes) * time.Minute

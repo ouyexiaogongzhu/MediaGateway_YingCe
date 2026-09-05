@@ -113,6 +113,10 @@ export type StoryboardRow = {
     emotion: string;
     lightingAndAtmosphere: string;
     audioEffects: string;
+    voiceMode?: string;
+    sfxTags?: string[];
+    musicGroupId?: string;
+    musicMood?: string;
     camera: string;
     motion: string;
     timeBeats: string;
@@ -135,6 +139,34 @@ export type StoryboardData = {
     rows: StoryboardRow[];
     visibleColumns: StoryboardColumn[];
     referenceNodeIds: string[];
+};
+
+// P11 分镜一键批量的落盘状态：视频批量的行状态以 rowId 为键（行号会随增删漂移）。
+export type StoryboardRowVideoState = {
+    status: string;
+    error?: string;
+    videoResourceId?: string;
+};
+
+export type StoryboardBatchRunState = {
+    taskId: string;
+    status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+    stage?: string;
+    progress?: number;
+    error?: string;
+};
+
+export type StoryboardVideoBatchState = StoryboardBatchRunState & {
+    rows: Record<string, StoryboardRowVideoState>;
+};
+
+export type StoryboardMusicBatchState = StoryboardBatchRunState & {
+    segments: Array<{ musicGroupId: string; resourceId: string; resourceUrl?: string; durationSeconds?: number }>;
+};
+
+export type StoryboardComposeState = StoryboardBatchRunState & {
+    videoResourceId?: string;
+    videoResourceUrl?: string;
 };
 
 export type CanvasGenerationBatchItem = {
@@ -366,6 +398,9 @@ export type CanvasNodeMetadata = {
     storyboardShotCount?: StoryboardShotCount;
     storyboardVideoInputMode?: StoryboardVideoInputMode;
     storyboardComposerHeight?: number;
+    storyboardVideoBatch?: StoryboardVideoBatchState;
+    storyboardMusicBatch?: StoryboardMusicBatchState;
+    storyboardCompose?: StoryboardComposeState;
     generationBatches?: CanvasGenerationBatch[];
     frame?: {
         collapsed: boolean;

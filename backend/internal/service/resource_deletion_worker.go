@@ -82,11 +82,10 @@ func (s *Service) cleanupDetachedUserResources(userID string, candidates []model
 		}
 	}
 	for _, document := range snapshot.Documents {
-		for resourceID := range documentReferencedResourceIDs(document.PrimaryJSON, candidateSet) {
-			referenced[resourceID] = struct{}{}
-		}
-		for resourceID := range documentReferencedResourceIDs(document.SecondaryJSON, candidateSet) {
-			referenced[resourceID] = struct{}{}
+		for _, raw := range documentReferenceJSONs(document) {
+			for resourceID := range documentReferencedResourceIDs(raw, candidateSet) {
+				referenced[resourceID] = struct{}{}
+			}
 		}
 	}
 	detached := make([]model.Resource, 0, len(candidates))

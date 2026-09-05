@@ -26,6 +26,18 @@ func (s *Service) processTask(ctx context.Context, task model.Task) (map[string]
 	if task.Type == "agent_storyboard_rows" {
 		return s.processStoryboardRowsTask(ctx, task)
 	}
+	if task.Type == storyboardRowVideoTaskType {
+		return s.processStoryboardRowVideoTask(ctx, task)
+	}
+	if task.Type == storyboardVideoBatchTaskType {
+		return s.processStoryboardVideoBatchTask(ctx, task)
+	}
+	if task.Type == storyboardMusicBatchTaskType {
+		return s.processStoryboardMusicBatchTask(ctx, task)
+	}
+	if task.Type == storyboardComposeTaskType {
+		return s.processStoryboardComposeTask(ctx, task)
+	}
 	if task.Type == "canvas_text" || task.Type == "canvas_image" || task.Type == "canvas_video" || task.Type == "canvas_audio" {
 		result, err := s.processCanvasGenerationTask(ctx, task.UserID, task.ProjectID, task.Type, task.Prompt, task.InputJSON)
 		return result, nil, err

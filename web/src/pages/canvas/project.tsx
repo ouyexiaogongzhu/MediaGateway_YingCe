@@ -1775,7 +1775,7 @@ function InfiniteCanvasPage() {
         handleGenerateNode,
     });
 
-    const { addScriptRow, createAndGenerateScriptVideos, createScriptActionBoards, createScriptImageNodes, createScriptVideoNodes, generateScriptImages, generateScriptRows, generateScriptVideos, removeScriptRow, replaceScriptRows, updateScriptRow } =
+    const { addScriptRow, composeStoryboard, createAndGenerateScriptVideos, createScriptActionBoards, createScriptImageNodes, createScriptVideoNodes, generateScriptImages, generateScriptRows, generateScriptVideos, generateStoryboardMusicBatch, generateStoryboardVideoBatch, removeScriptRow, replaceScriptRows, updateScriptRow } =
         useCanvasStoryboard({
             projectId,
             addedSkills,
@@ -2821,6 +2821,12 @@ function InfiniteCanvasPage() {
                             else void createAndGenerateScriptVideos(activeScriptNode.id, rowIds);
                         }}
                         onVideoInputModeChange={(storyboardVideoInputMode) => activeScriptNode && handleConfigNodeChange(activeScriptNode.id, { storyboardVideoInputMode })}
+                        videoBatch={activeScriptNode?.metadata?.storyboardVideoBatch}
+                        musicBatch={activeScriptNode?.metadata?.storyboardMusicBatch}
+                        compose={activeScriptNode?.metadata?.storyboardCompose}
+                        onGenerateVideoBatch={() => activeScriptNode && void generateStoryboardVideoBatch(activeScriptNode.id)}
+                        onGenerateMusicBatch={() => activeScriptNode && void generateStoryboardMusicBatch(activeScriptNode.id)}
+                        onCompose={() => activeScriptNode && void composeStoryboard(activeScriptNode.id)}
                     />
 
                     {directorNodeId && activeDirectorScene ? (

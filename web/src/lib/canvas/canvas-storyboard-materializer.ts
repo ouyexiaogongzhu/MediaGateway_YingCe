@@ -16,8 +16,15 @@ export function storyboardRowReferenceNodeIds(
     const characterNodeIds = nodes
         .filter((node) => node.metadata?.workflowKind === "character" && Boolean(node.metadata.characterAssetId) && characterAssetIds.has(node.metadata.characterAssetId!))
         .map((node) => node.id);
+    // 行级角色绑定优先：行上绑了 character 参考节点时，script 级参考全集
+    // （常含其他角色的定妆图）不再叠加——否则「冰法師」的行会连「火魔法師」
+    // 定妆一起收到，角色串味。
+    const rowCharacterBindings = (row.assetBindings || []).filter((binding) => binding.nodeId && binding.role === "character");
+    const scriptReferenceNodeIds = rowCharacterBindings.length
+        ? []
+        : (scriptNode.metadata?.storyboard?.referenceNodeIds || []);
     const referenceIds = new Set([
-        ...(scriptNode.metadata?.storyboard?.referenceNodeIds || []),
+        ...scriptReferenceNodeIds,
         ...(row.assetBindings || []).map((binding) => binding.nodeId),
         ...characterNodeIds,
         ...connections.filter((connection) => connection.toNodeId === scriptNode.id && connection.toHandleId === `row:${row.id}`).map((connection) => connection.fromNodeId),
