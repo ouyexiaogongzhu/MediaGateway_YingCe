@@ -827,20 +827,6 @@ func RegisterProjectRoutes(r *gin.RouterGroup, svc *service.Service) {
 		}
 		ok(c, result)
 	})
-	r.POST("/projects/:id/shots/:shotId/render", func(c *gin.Context) {
-		user, err := currentUser(c, svc)
-		if err != nil {
-			return
-		}
-		var req service.RenderAllShotsRequest
-		_ = c.ShouldBindJSON(&req) // body 可选
-		result, err := svc.RenderProjectShot(c.Request.Context(), user.ID, c.Param("id"), c.Param("shotId"), req)
-		if err != nil {
-			failService(c, err)
-			return
-		}
-		ok(c, result)
-	})
 	r.POST("/projects/:id/shots/:shotId/revisions", func(c *gin.Context) {
 		user, err := currentUser(c, svc)
 		if err != nil {
