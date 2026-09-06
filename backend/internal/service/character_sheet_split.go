@@ -238,6 +238,7 @@ func splitCharacterSheetReference(item protocol.MediaReference) ([]protocol.Medi
 	if !ok {
 		return nil, false
 	}
+	fmt.Printf("[sheet-split] split ok: %d panels\n", len(pngs))
 	suffixes := []string{"_closeup", "_front"}
 	split := make([]protocol.MediaReference, 0, len(pngs))
 	for index, pngBytes := range pngs {
