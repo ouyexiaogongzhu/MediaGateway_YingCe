@@ -79,6 +79,9 @@ func (s *Service) repairStoryboardPlan(ctx context.Context, task model.Task, inp
 		if promptErr != nil {
 			return agentStoryboardPlan{}, promptErr
 		}
+		if brief := s.buildProjectCharacterAssetBrief(task.UserID, task.ProjectID); brief != "" {
+			repairPrompt += "\n\n" + brief
+		}
 		repairCtx, cancel, budgetErr := storyboardRepairContext(ctx)
 		if budgetErr != nil {
 			return agentStoryboardPlan{}, budgetErr
@@ -139,6 +142,9 @@ func (s *Service) generateStoryboardPlan(ctx context.Context, task model.Task, i
 	plannerPrompt, err := s.buildAgentStoryboardPlannerPrompt(task.UserID, task.Prompt, input.Requirements, assets, input.ProjectStyle, input.Characters, shotDuration, shotCount)
 	if err != nil {
 		return agentStoryboardPlan{}, nil, err
+	}
+	if brief := s.buildProjectCharacterAssetBrief(task.UserID, task.ProjectID); brief != "" {
+		plannerPrompt += "\n\n" + brief
 	}
 	result, err := runTextTask(ctx, canvasGenerationInput{Mode: "text", Prompt: plannerPrompt, Config: config, StreamText: true, MaxOutputTokens: storyboardOutputTokenLimit(shotCount)})
 	if err != nil {

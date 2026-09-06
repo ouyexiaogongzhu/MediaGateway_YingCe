@@ -6,6 +6,12 @@ import (
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	"infinite-canvas/backend/internal/model"
+	"infinite-canvas/backend/internal/repository"
+
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
 )
 
 func TestStoryboardCinematicQualityContractIncludesRequestedCountAndDuration(t *testing.T) {
@@ -236,5 +242,77 @@ func TestNormalizeStoryboardAssetsBoundsAndDeduplicatesInput(t *testing.T) {
 	}
 	if utf8.RuneCountInString(assets[0].Prompt) != 600 || utf8.RuneCountInString(assets[0].Tags[1]) != 64 {
 		t.Fatalf("expected bounded prompt and tag lengths: %#v", assets[0])
+	}
+}
+
+func TestCharacterLookExcerptKeepsCompleteSentencesWithinLimit(t *testing.T) {
+	keyword := "她留黑色长直发，穿白色衬衫与深蓝色百褶裙，脚踩白色帆布鞋。"
+	long := strings.Repeat("角色站在废弃的车站等待末班车，雨水顺着站台边缘滴落。", 12) + keyword
+	excerpt := characterLookExcerpt(long)
+	if excerpt != keyword {
+		t.Fatalf("keyword sentence should be picked from long prompt, got %q", excerpt)
+	}
+
+	many := strings.Repeat("她穿月白色长裙，裙摆绣银线，腰束同色丝带。", 8)
+	capped := characterLookExcerpt(many)
+	if utf8.RuneCountInString(capped) > 200 {
+		t.Fatalf("excerpt exceeds limit: %d runes", utf8.RuneCountInString(capped))
+	}
+	if !strings.HasSuffix(capped, "。") {
+		t.Fatalf("excerpt must end at a complete sentence: %q", capped)
+	}
+
+	if got := characterLookExcerpt("短发，穿红裙。"); got != "短发，穿红裙。" {
+		t.Fatalf("short prompt must pass through unchanged, got %q", got)
+	}
+}
+
+func TestSplitSentencesKeepsPunctuation(t *testing.T) {
+	sentences := splitSentences("第一句。第二句！第三句？未完句")
+	if len(sentences) != 4 || sentences[0] != "第一句。" || sentences[3] != "未完句" {
+		t.Fatalf("unexpected sentences: %#v", sentences)
+	}
+}
+
+func TestBuildProjectCharacterAssetBriefUsesLatestVersionPromptAndExactTitle(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, _ := db.DB()
+	sqlDB.SetMaxOpenConns(1)
+	if err := db.AutoMigrate(&model.Asset{}, &model.AssetVersion{}, &model.ProjectAssetLink{}); err != nil {
+		t.Fatal(err)
+	}
+	seed := &model.Asset{ID: "char-1", UserID: "user", Kind: "entity", Category: model.AssetCategoryCharacter, Status: model.AssetVersionStatusConfirmed, PrimaryVersionID: "v2", Title: "林 晚（女主）"}
+	old := &model.AssetVersion{ID: "v1", AssetID: "char-1", Version: 1, Status: model.AssetVersionStatusArchived, Prompt: "旧版：短发红裙。"}
+	latest := &model.AssetVersion{ID: "v2", AssetID: "char-1", Version: 2, Status: model.AssetVersionStatusConfirmed, Prompt: "她留黑色长直发，穿白色衬衫与深蓝色百褶裙，脚踩白色帆布鞋。"}
+	other := &model.Asset{ID: "env-1", UserID: "user", Kind: "entity", Category: model.AssetCategoryEnvironment, Status: model.AssetVersionStatusConfirmed, Title: "废弃车站"}
+	if err := db.Create([]*model.Asset{seed, other}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create([]*model.AssetVersion{old, latest}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.ProjectAssetLink{ID: "link-1", ProjectID: "proj-1", AssetID: "char-1"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	svc := New(repository.New(db), t.TempDir())
+
+	brief := svc.buildProjectCharacterAssetBrief("user", "proj-1")
+	if !strings.Contains(brief, "- 林 晚（女主）：她留黑色长直发") {
+		t.Fatalf("brief must use exact assets.title and latest version prompt, got %q", brief)
+	}
+	if strings.Contains(brief, "旧版") || strings.Contains(brief, "废弃车站") {
+		t.Fatalf("brief must skip stale versions and non-character assets, got %q", brief)
+	}
+	if !strings.Contains(brief, "imagePrompt 需显式写出出场角色的完整造型") {
+		t.Fatalf("brief must carry the styling instruction, got %q", brief)
+	}
+	if got := svc.buildProjectCharacterAssetBrief("user", ""); got != "" {
+		t.Fatalf("empty project must yield empty brief, got %q", got)
+	}
+	if got := svc.buildProjectCharacterAssetBrief("user", "proj-none"); got != "" {
+		t.Fatalf("project without links must yield empty brief, got %q", got)
 	}
 }

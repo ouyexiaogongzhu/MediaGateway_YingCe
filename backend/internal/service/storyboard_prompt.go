@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode/utf8"
+
+	"infinite-canvas/backend/internal/model"
 )
 
 func (s *Service) buildAgentStoryboardPlannerPrompt(userID string, brief string, requirements string, assets []storyboardAsset, projectStyle storyboardProjectStyle, characters []storyboardCharacterCard, shotDuration int, shotCount int) (string, error) {
@@ -88,4 +91,123 @@ description 只写可见画面与动作；把“意识到、回忆起、感到�
 func storyboardCinematicQualityContract(shotDuration int, shotCount int) string {
 	values := storyboardPromptValues("", "", nil, storyboardProjectStyle{}, nil, shotDuration, shotCount)
 	return defaultStoryboardPromptTemplate() + "\n\n" + storyboardExecutionContract(values["单镜头时长规则"], values["镜头数量规则"])
+}
+
+// buildProjectCharacterAssetBrief 汇总项目角色资产（最新版本 prompt）的造型要点清单，
+// 注入分镜生成 prompt，让文本模型在写分镜时“看得见”角色服装/发型。
+// 行首 title 与 assets.title 逐字一致，供下游 autoShotCharacterReferences 按 title 自动补绑参考图。
+func (s *Service) buildProjectCharacterAssetBrief(userID string, projectID string) string {
+	if strings.TrimSpace(projectID) == "" {
+		return ""
+	}
+	assets, err := s.repo.ProjectAssets(userID, projectID)
+	if err != nil {
+		return "" // 查询失败不阻断分镜生成，退化为无资产清单
+	}
+	lines := make([]string, 0, 4)
+	for _, asset := range assets {
+		if asset.Category != model.AssetCategoryCharacter {
+			continue
+		}
+		versions, err := s.repo.AssetVersions(asset.ID)
+		if err != nil || len(versions) == 0 {
+			continue
+		}
+		// 与 autoShotCharacterReferences 同规则：最新 confirmed 优先，主版本兜底
+		version := versions[0]
+		for _, candidate := range versions {
+			if candidate.ID == asset.PrimaryVersionID {
+				version = candidate
+			}
+			if candidate.Status == model.AssetVersionStatusConfirmed {
+				version = candidate
+				break
+			}
+		}
+		prompt := strings.TrimSpace(version.Prompt)
+		if prompt == "" {
+			continue
+		}
+		lines = append(lines, "- "+strings.TrimSpace(asset.Title)+"："+characterLookExcerpt(prompt))
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return "【项目角色资产】\n" + strings.Join(lines, "\n") + "\n生成各分镜时，出场角色必须使用以上造型要点，不得更改发型、赤足/鞋袜、裙/裤等服装细节；分镜的 imagePrompt 需显式写出出场角色的完整造型。"
+}
+
+const characterLookExcerptLimit = 200
+
+// characterLookExcerpt 截取角色 prompt 中含服装/发型/外貌特征的关键句，最多约 200 字，按完整句截断；
+// 优先取关键句，无命中时回退为开头完整句。
+func characterLookExcerpt(prompt string) string {
+	prompt = strings.TrimSpace(prompt)
+	if utf8.RuneCountInString(prompt) <= characterLookExcerptLimit {
+		return prompt
+	}
+	for _, pick := range [][]string{characterLookSentences(prompt), leadingSentences(prompt)} {
+		if excerpt := strings.Join(pick, ""); strings.TrimSpace(excerpt) != "" {
+			return strings.TrimSpace(excerpt)
+		}
+	}
+	return prompt
+}
+
+// characterLookSentences 只保留含造型关键词的完整句，累计不超过 200 字。
+func characterLookSentences(prompt string) []string {
+	kept := make([]string, 0, 4)
+	used := 0
+	for _, sentence := range splitSentences(prompt) {
+		count := utf8.RuneCountInString(sentence)
+		if used+count > characterLookExcerptLimit {
+			break
+		}
+		if containsCharacterLookKeyword(sentence) {
+			kept = append(kept, sentence)
+			used += count
+		}
+	}
+	return kept
+}
+
+// leadingSentences 从开头取完整句，累计不超过 200 字。
+func leadingSentences(prompt string) []string {
+	kept := make([]string, 0, 4)
+	used := 0
+	for _, sentence := range splitSentences(prompt) {
+		count := utf8.RuneCountInString(sentence)
+		if used+count > characterLookExcerptLimit {
+			break
+		}
+		kept = append(kept, sentence)
+		used += count
+	}
+	return kept
+}
+
+func containsCharacterLookKeyword(sentence string) bool {
+	for _, keyword := range []string{"发", "穿", "鞋", "裙", "裤", "袜", "赤", "饰", "帽", "衣", "脸", "眼", "眉", "身"} {
+		if strings.Contains(sentence, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
+// splitSentences 按中英文句末标点和换行切分为完整句（保留标点）。
+func splitSentences(text string) []string {
+	var sentences []string
+	var current strings.Builder
+	for _, r := range text {
+		current.WriteRune(r)
+		switch r {
+		case '。', '！', '？', '；', '\n':
+			sentences = append(sentences, current.String())
+			current.Reset()
+		}
+	}
+	if strings.TrimSpace(current.String()) != "" {
+		sentences = append(sentences, current.String())
+	}
+	return sentences
 }

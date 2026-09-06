@@ -315,22 +315,66 @@ func (s *Service) autoShotCharacterReferences(userID string, projectID string, s
 	return augmented
 }
 
-// matchAutoCharacterAssets 保守匹配：角色 title 归一化（仅字母数字）后完整出现在归一化分镜文本中，
-// 且该角色未绑定过；短于 2 字的核心名不参与，避免误伤。
+// matchAutoCharacterAssets 保守匹配：角色 title 归一化（仅字母数字）后穷举其全部前缀/后缀
+// 词元（中文无分词，见 characterTitleTokens），分镜文本包含任一词元且该角色未绑定过即命中。
+// 长度 <3 的短词元若同时命中多个不同角色资产（如「冰法」同属多个变体），对这些资产全部失效，
+// 只有唯一命中的短词元才作数。与前端 workflow-shot-references.ts 的 autoCharacterEntries 同规则。
 func matchAutoCharacterAssets(textKey string, assets []model.Asset, boundAssetIDs map[string]bool) []model.Asset {
-	matched := make([]model.Asset, 0, 2)
+	tokenHits := make(map[string]map[string]bool)
+	hitsByAsset := make(map[string][]string, len(assets))
+	candidates := make([]model.Asset, 0, 2)
 	for _, asset := range assets {
 		if asset.Category != model.AssetCategoryCharacter || boundAssetIDs[asset.ID] {
 			continue
 		}
-		core := model.AssetCandidateNameKey(asset.Title)
-		if utf8.RuneCountInString(core) < 2 || !strings.Contains(textKey, core) {
-			continue
+		for _, token := range characterTitleTokens(model.AssetCandidateNameKey(asset.Title)) {
+			if !strings.Contains(textKey, token) {
+				continue
+			}
+			if tokenHits[token] == nil {
+				tokenHits[token] = make(map[string]bool, 2)
+			}
+			tokenHits[token][asset.ID] = true
+			hitsByAsset[asset.ID] = append(hitsByAsset[asset.ID], token)
 		}
-		boundAssetIDs[asset.ID] = true
-		matched = append(matched, asset)
+		if len(hitsByAsset[asset.ID]) > 0 {
+			candidates = append(candidates, asset)
+		}
+	}
+	matched := make([]model.Asset, 0, 2)
+	for _, asset := range candidates {
+		for _, token := range hitsByAsset[asset.ID] {
+			if utf8.RuneCountInString(token) >= 3 || len(tokenHits[token]) == 1 {
+				boundAssetIDs[asset.ID] = true
+				matched = append(matched, asset)
+				break
+			}
+		}
 	}
 	return matched
+}
+
+// characterTitleTokens 穷举核心名的前缀与后缀词元（rune 长度 2..len，去重）。
+// 与前端 workflow-shot-references.ts 的 characterTitleTokens 逐字一致，改动须两端同步。
+func characterTitleTokens(core string) []string {
+	runes := []rune(core)
+	if len(runes) < 2 {
+		return nil
+	}
+	seen := make(map[string]bool, 2*len(runes)-1)
+	tokens := make([]string, 0, 2*len(runes)-1)
+	for size := 2; size <= len(runes); size++ {
+		prefix, suffix := string(runes[:size]), string(runes[len(runes)-size:])
+		if !seen[prefix] {
+			seen[prefix] = true
+			tokens = append(tokens, prefix)
+		}
+		if !seen[suffix] {
+			seen[suffix] = true
+			tokens = append(tokens, suffix)
+		}
+	}
+	return tokens
 }
 
 // resolveShotReferencePaths 把镜头引用的资产版本解析成本地文件路径供 gateway refs 使用。

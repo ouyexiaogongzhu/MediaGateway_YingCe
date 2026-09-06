@@ -250,20 +250,50 @@ func TestRenderAllProjectShotsChainsLastFrameAndRegistersFinal(t *testing.T) {
 }
 
 func TestMatchAutoCharacterAssets(t *testing.T) {
-	ice := model.Asset{ID: "asset-ice", Category: model.AssetCategoryCharacter, PrimaryVersionID: "ice-draft", Title: "冰魔法师（霜璃）"}
-	fire := model.Asset{ID: "asset-fire", Category: model.AssetCategoryCharacter, PrimaryVersionID: "fire-v1", Title: "火法师"}
+	ice := model.Asset{ID: "asset-ice", Category: model.AssetCategoryCharacter, PrimaryVersionID: "ice-draft", Title: "冰法师霜璃"}
+	fire := model.Asset{ID: "asset-fire", Category: model.AssetCategoryCharacter, PrimaryVersionID: "fire-v1", Title: "火法师焰璃"}
+	snow := model.Asset{ID: "asset-snow", Category: model.AssetCategoryCharacter, PrimaryVersionID: "snow-v1", Title: "冰法师雪"}
 	prop := model.Asset{ID: "asset-prop", Category: model.AssetCategoryProp, PrimaryVersionID: "prop-v1", Title: "霜璃雕像"}
-	bound := map[string]bool{"asset-fire": true}
 
-	matched := matchAutoCharacterAssets(model.AssetCandidateNameKey("中景：冰魔法师（霜璃）与 火法师 对峙，衣摆结霜"), []model.Asset{ice, fire, prop}, bound)
-	if len(matched) != 1 || matched[0].ID != "asset-ice" {
-		t.Fatalf("matched = %+v, want only asset-ice (fire already bound, prop wrong category)", matched)
+	tests := []struct {
+		name    string
+		text    string
+		assets  []model.Asset
+		bound   map[string]bool
+		wantIDs []string
+	}{
+		{name: "完整title命中", text: "中景：冰法师霜璃 特写", assets: []model.Asset{ice}, wantIDs: []string{"asset-ice"}},
+		{name: "短名后缀命中", text: "霜璃 转身离去", assets: []model.Asset{ice}, wantIDs: []string{"asset-ice"}},
+		{name: "称号前缀命中", text: "冰法师 抬手结霜", assets: []model.Asset{ice}, wantIDs: []string{"asset-ice"}},
+		{name: "短名只命中火", text: "焰璃 怒吼，冰霜消融", assets: []model.Asset{ice, fire}, wantIDs: []string{"asset-fire"}},
+		{name: "中缀泛称不命中任何一个", text: "两位 法师 对峙", assets: []model.Asset{ice, fire}, wantIDs: nil},
+		{name: "短词元多命中全失效", text: "冰法 咒语回荡", assets: []model.Asset{ice, snow}, wantIDs: nil},
+		{name: "短词元唯一命中有效", text: "霜璃 咒语回荡", assets: []model.Asset{ice, snow}, wantIDs: []string{"asset-ice"}},
+		{name: "已绑定不重复补挂", text: "冰法师霜璃 与 火法师焰璃", assets: []model.Asset{ice, fire}, bound: map[string]bool{"asset-fire": true}, wantIDs: []string{"asset-ice"}},
+		{name: "非角色类别不参与", text: "霜璃雕像 特写", assets: []model.Asset{prop}, wantIDs: nil},
+		{name: "无关文本不命中", text: "空镜：雪原日落", assets: []model.Asset{ice}, wantIDs: nil},
+		{name: "单字核心名不参与", text: "他拿出 月 光石", assets: []model.Asset{{ID: "m", Category: model.AssetCategoryCharacter, Title: "月"}}, wantIDs: nil},
 	}
-	if len(matchAutoCharacterAssets(model.AssetCandidateNameKey("空镜：雪原日落"), []model.Asset{ice}, bound)) != 0 {
-		t.Fatal("text without character title must not match")
-	}
-	if len(matchAutoCharacterAssets(model.AssetCandidateNameKey("他拿出 月 光石"), []model.Asset{{ID: "m", Category: model.AssetCategoryCharacter, Title: "月"}}, bound)) != 0 {
-		t.Fatal("single-rune core name must not match")
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			bound := test.bound
+			if bound == nil {
+				bound = map[string]bool{}
+			}
+			matched := matchAutoCharacterAssets(model.AssetCandidateNameKey(test.text), test.assets, bound)
+			gotIDs := make([]string, 0, len(matched))
+			for _, asset := range matched {
+				gotIDs = append(gotIDs, asset.ID)
+			}
+			if len(gotIDs) != len(test.wantIDs) {
+				t.Fatalf("matched = %v, want %v", gotIDs, test.wantIDs)
+			}
+			for index := range gotIDs {
+				if gotIDs[index] != test.wantIDs[index] {
+					t.Fatalf("matched = %v, want %v", gotIDs, test.wantIDs)
+				}
+			}
+		})
 	}
 }
 

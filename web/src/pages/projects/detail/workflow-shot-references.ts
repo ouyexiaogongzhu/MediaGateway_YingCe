@@ -89,8 +89,10 @@ export function buildShotAssetReferenceContext(detail: ProjectDetail, shotId: st
     };
 }
 
-// 分镜文本（标题+画面提示词+视频提示词+画面描述）包含角色资产 title 核心名而去该角色
-// 未手动绑定时，自动补挂其主版本参考；仅内存补全，不写库。与后端 autoShotCharacterReferences 同规则。
+// 分镜文本（标题+画面提示词+视频提示词+画面描述）包含角色资产 title 核心名的任一前缀/后缀
+// 词元（中文无分词，穷举前后缀）而该角色未手动绑定时，自动补挂其主版本参考；仅内存补全，
+// 不写库。长度 <3 的短词元若同时命中多个角色资产则对这些资产全部失效。与后端
+// project_shot_render.go 的 matchAutoCharacterAssets/characterTitleTokens 逐字同规则。
 function autoCharacterEntries(detail: ProjectDetail, shotId: string, seenAssetIds: Set<string>): ShotAssetContextEntry[] {
     const shot = (detail.shots || []).find((item) => item.id === shotId);
     if (!shot) return [];
@@ -99,14 +101,41 @@ function autoCharacterEntries(detail: ProjectDetail, shotId: string, seenAssetId
         || revisions.filter((item) => item.shotId === shotId).sort((left, right) => right.version - left.version)[0];
     const textKey = assetNameKey([shot.title, revision?.imagePrompt, revision?.videoPrompt, revision?.plotDescription].filter(Boolean).join("\n"));
     if (textKey.length < 2) return [];
-    return (detail.assets || []).filter((asset) => asset.category === "character" && !seenAssetIds.has(asset.id)).flatMap((asset) => {
-        const core = assetNameKey(asset.title);
-        if (core.length < 2 || !textKey.includes(core)) return [];
+    const candidates = (detail.assets || []).filter((asset) => asset.category === "character" && !seenAssetIds.has(asset.id));
+    const tokenHits = new Map<string, Set<string>>();
+    const hitsByAsset = new Map<string, string[]>();
+    for (const asset of candidates) {
+        for (const token of characterTitleTokens(assetNameKey(asset.title))) {
+            if (!textKey.includes(token)) continue;
+            const hits = tokenHits.get(token) || new Set<string>();
+            hits.add(asset.id);
+            tokenHits.set(token, hits);
+            const assetHits = hitsByAsset.get(asset.id) || [];
+            assetHits.push(token);
+            hitsByAsset.set(asset.id, assetHits);
+        }
+    }
+    return candidates.flatMap((asset) => {
+        const hits = hitsByAsset.get(asset.id) || [];
+        if (!hits.some((token) => token.length >= 3 || tokenHits.get(token)?.size === 1)) return [];
         const image = projectAssetReferenceImage(asset);
         if (!image) return [];
         seenAssetIds.add(asset.id);
         return [{ asset, image }];
     });
+}
+
+// 与后端 project_shot_render.go 的 characterTitleTokens 逐字一致：穷举核心名前缀与后缀
+// 词元（rune 长度 2..len，去重），改动须两端同步。
+function characterTitleTokens(core: string) {
+    const runes = Array.from(core);
+    if (runes.length < 2) return [];
+    const tokens = new Set<string>();
+    for (let size = 2; size <= runes.length; size++) {
+        tokens.add(runes.slice(0, size).join(""));
+        tokens.add(runes.slice(runes.length - size).join(""));
+    }
+    return Array.from(tokens);
 }
 
 // 与后端 model.AssetCandidateNameKey 同规则：仅保留字母数字（Unicode），供保守包含匹配
