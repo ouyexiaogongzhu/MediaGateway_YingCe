@@ -3,11 +3,15 @@ package service
 import (
 	"bytes"
 	"encoding/base64"
+	"fmt"
 	"image"
 	"image/draw"
 	_ "image/jpeg"
 	"image/png"
+	"io"
+	"net/http"
 	"strings"
+	"time"
 
 	"infinite-canvas/backend/internal/protocol"
 )
@@ -25,33 +29,51 @@ const (
 
 // splitCharacterSheetDataUrl 检测 dataURL 图片是否为多格角色三视图拼图；
 // 是则裁出前两格（特写+正面）返回两个 png dataURL；否则返回 (nil, false)。
-// 永不返回错误：任何解码/裁切失败都按「不是拼图」处理，不阻塞生成。
 func splitCharacterSheetDataUrl(dataURL string) ([]string, bool) {
 	comma := strings.Index(dataURL, ",")
 	if comma < 0 || !strings.HasPrefix(strings.ToLower(dataURL[:comma]), "data:image/") {
+		fmt.Println("[sheet-split] skip: not a data:image dataURL")
 		return nil, false
 	}
-	raw, err := base64.StdEncoding.DecodeString(dataURL[comma+1:])
-	if err != nil {
+	raw := decodeDataURLBytes(dataURL)
+	if raw == nil {
+		fmt.Println("[sheet-split] skip: base64 decode failed")
 		return nil, false
 	}
-	src, _, err := image.Decode(bytes.NewReader(raw))
-	if err != nil {
-		return nil, false
-	}
-	panels, ok := splitCharacterSheetImage(src)
+	panels, ok := splitCharacterSheetBytes(raw)
 	if !ok {
 		return nil, false
 	}
 	result := make([]string, 0, len(panels))
+	for _, p := range panels {
+		result = append(result, "data:image/png;base64,"+base64.StdEncoding.EncodeToString(p))
+	}
+	return result, true
+}
+
+// splitCharacterSheetBytes 对原始图片字节做三视图拼图裁切，返回前两格的 png 字节。
+// 永不返回错误：任何解码/裁切失败都按「不是拼图」处理，不阻塞生成。
+func splitCharacterSheetBytes(raw []byte) ([][]byte, bool) {
+	src, _, err := image.Decode(bytes.NewReader(raw))
+	if err != nil {
+		fmt.Println("[sheet-split] skip: image decode failed")
+		return nil, false
+	}
+	panels, ok := splitCharacterSheetImage(src)
+	if !ok {
+		fmt.Printf("[sheet-split] skip: not a multi-panel collage (%dx%d)\n",
+			src.Bounds().Dx(), src.Bounds().Dy())
+		return nil, false
+	}
+	out := make([][]byte, 0, len(panels))
 	for _, panel := range panels {
 		var buf bytes.Buffer
 		if err := png.Encode(&buf, panel); err != nil {
 			return nil, false
 		}
-		result = append(result, "data:image/png;base64,"+base64.StdEncoding.EncodeToString(buf.Bytes()))
+		out = append(out, buf.Bytes())
 	}
-	return result, true
+	return out, true
 }
 
 // splitCharacterSheetImage 通过「列留白扫描」找分隔线，把横幅拼图切成竖版面板。
@@ -186,25 +208,47 @@ func abs(v int) int {
 }
 
 // splitCharacterSheetReference 把一条 edit_source 参考替换为裁切后的前两格；
-// 非拼图、URL 引用或其他类型一律返回 (nil, false) 走原参考。
+// dataURL 与 URL 引用都支持（URL 下载失败按非拼图处理）；其他类型走原参考。
 func splitCharacterSheetReference(item protocol.MediaReference) ([]protocol.MediaReference, bool) {
-	if item.URL != "" || !strings.HasPrefix(strings.ToLower(item.DataURL), "data:image/") {
+	var raw []byte
+	switch {
+	case strings.HasPrefix(strings.ToLower(item.DataURL), "data:image/"):
+		raw = decodeDataURLBytes(item.DataURL)
+	case item.URL != "":
+		client := &http.Client{Timeout: 30 * time.Second}
+		resp, err := client.Get(item.URL)
+		if err != nil {
+			fmt.Println("[sheet-split] skip: fetch URL failed:", err.Error())
+			return nil, false
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != 200 {
+			fmt.Println("[sheet-split] skip: fetch URL status", resp.StatusCode)
+			return nil, false
+		}
+		buf, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+		if err != nil {
+			return nil, false
+		}
+		raw = buf
+	default:
 		return nil, false
 	}
-	panels, ok := splitCharacterSheetDataUrl(item.DataURL)
+	pngs, ok := splitCharacterSheetBytes(raw)
 	if !ok {
 		return nil, false
 	}
 	suffixes := []string{"_closeup", "_front"}
-	split := make([]protocol.MediaReference, 0, len(panels))
-	for index, dataURL := range panels {
+	split := make([]protocol.MediaReference, 0, len(pngs))
+	for index, pngBytes := range pngs {
 		panel := item
-		panel.DataURL = dataURL
+		panel.DataURL = "data:image/png;base64," + base64.StdEncoding.EncodeToString(pngBytes)
+		panel.URL = ""
 		panel.Name = strings.TrimSpace(item.Name) + suffixes[index]
 		if item.ID != "" {
 			panel.ID = item.ID + suffixes[index]
 		}
-		if cfg, _, err := image.DecodeConfig(bytes.NewReader(decodeDataURLBytes(dataURL))); err == nil {
+		if cfg, _, err := image.DecodeConfig(bytes.NewReader(pngBytes)); err == nil {
 			panel.Metadata["width"] = cfg.Width
 			panel.Metadata["height"] = cfg.Height
 		}
