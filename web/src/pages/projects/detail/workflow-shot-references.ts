@@ -24,10 +24,12 @@ export type ShotPromptAssetReference = {
     dialogue?: string;
 };
 
+type ShotAssetContextEntry = { asset: ProjectAsset; image: ReferenceImage; reference?: ShotAssetReference };
+
 export function buildShotAssetReferenceContext(detail: ProjectDetail, shotId: string): ShotAssetReferenceContext {
     const assetByVersionId = new Map(detail.assets.filter((asset) => asset.primaryVersionId).map((asset) => [asset.primaryVersionId as string, asset]));
     const seenAssetIds = new Set<string>();
-    const entries = (detail.shotReferences || []).flatMap((reference) => {
+    const entries: ShotAssetContextEntry[] = (detail.shotReferences || []).flatMap((reference) => {
         if (reference.shotId !== shotId || reference.status !== "linked") return [];
         const asset = reference.asset || assetByVersionId.get(reference.assetVersionId);
         if (!asset || seenAssetIds.has(asset.id)) return [];
@@ -36,10 +38,11 @@ export function buildShotAssetReferenceContext(detail: ProjectDetail, shotId: st
         seenAssetIds.add(asset.id);
         return [{ asset, image, reference }];
     });
+    const allEntries = [...entries, ...autoCharacterEntries(detail, shotId, seenAssetIds)];
 
     const referenceAudios: ReferenceAudio[] = [];
     const audioIndexByResourceId = new Map<string, number>();
-    const assetReferences = entries.map(({ asset }, index) => {
+    const assetReferences = allEntries.map(({ asset }, index) => {
         const sampleResourceId = stringValue(asset.character?.voice?.profile.sampleResourceId);
         let audioIndex: number | undefined;
         if (sampleResourceId) {
@@ -67,7 +70,7 @@ export function buildShotAssetReferenceContext(detail: ProjectDetail, shotId: st
     });
 
     return {
-        mentionReferences: entries.map(({ asset, image }) => ({
+        mentionReferences: allEntries.map(({ asset, image }) => ({
             id: `project-asset:${asset.id}`,
             nodeId: "",
             assetId: asset.id,
@@ -79,11 +82,36 @@ export function buildShotAssetReferenceContext(detail: ProjectDetail, shotId: st
             active: true,
             category: projectAssetCategory(asset.category),
         })),
-        referenceImages: entries.map(({ image }) => image),
+        referenceImages: allEntries.map(({ image }) => image),
         referenceAudios,
         assetReferences,
-        resolvedCharacterVersions: entries.flatMap(({ asset, reference }) => asset.character ? [{ assetId: asset.id, versionId: reference.referencedVersion?.id || reference.assetVersionId || asset.character.versionId }] : []),
+        resolvedCharacterVersions: allEntries.flatMap(({ asset, reference }) => asset.character ? [{ assetId: asset.id, versionId: reference?.referencedVersion?.id || reference?.assetVersionId || asset.primaryVersionId || asset.character.versionId }] : []),
     };
+}
+
+// 分镜文本（标题+画面提示词+视频提示词+画面描述）包含角色资产 title 核心名而去该角色
+// 未手动绑定时，自动补挂其主版本参考；仅内存补全，不写库。与后端 autoShotCharacterReferences 同规则。
+function autoCharacterEntries(detail: ProjectDetail, shotId: string, seenAssetIds: Set<string>): ShotAssetContextEntry[] {
+    const shot = (detail.shots || []).find((item) => item.id === shotId);
+    if (!shot) return [];
+    const revisions = detail.shotRevisions || [];
+    const revision = revisions.find((item) => item.id === shot.currentRevisionId)
+        || revisions.filter((item) => item.shotId === shotId).sort((left, right) => right.version - left.version)[0];
+    const textKey = assetNameKey([shot.title, revision?.imagePrompt, revision?.videoPrompt, revision?.plotDescription].filter(Boolean).join("\n"));
+    if (textKey.length < 2) return [];
+    return (detail.assets || []).filter((asset) => asset.category === "character" && !seenAssetIds.has(asset.id)).flatMap((asset) => {
+        const core = assetNameKey(asset.title);
+        if (core.length < 2 || !textKey.includes(core)) return [];
+        const image = projectAssetReferenceImage(asset);
+        if (!image) return [];
+        seenAssetIds.add(asset.id);
+        return [{ asset, image }];
+    });
+}
+
+// 与后端 model.AssetCandidateNameKey 同规则：仅保留字母数字（Unicode），供保守包含匹配
+function assetNameKey(value: string) {
+    return value.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
 }
 
 export function resolveShotAssetMentionPrompt(prompt: string, context: ShotAssetReferenceContext, options: { dialogue?: string } = {}) {

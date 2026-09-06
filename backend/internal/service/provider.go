@@ -103,7 +103,7 @@ type providerConfig struct {
 	RunningHubUploadKey   string                 `json:"runningHubUploadApiKey"`
 }
 
-const providerHTTPTimeout = 10 * time.Minute // 本地 LLM 冷加载（19GB）可达数分钟，5min 会砍掉正常请求
+const providerHTTPTimeout = 30 * time.Minute // 本地推理网关同步生图实测 70s~500s+，10min 会掐断正常请求
 const videoPollTimeout = 30 * time.Minute
 const maxProviderResponseBytes int64 = 64 << 20
 

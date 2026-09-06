@@ -249,6 +249,24 @@ func TestRenderAllProjectShotsChainsLastFrameAndRegistersFinal(t *testing.T) {
 	}
 }
 
+func TestMatchAutoCharacterAssets(t *testing.T) {
+	ice := model.Asset{ID: "asset-ice", Category: model.AssetCategoryCharacter, PrimaryVersionID: "ice-draft", Title: "冰魔法师（霜璃）"}
+	fire := model.Asset{ID: "asset-fire", Category: model.AssetCategoryCharacter, PrimaryVersionID: "fire-v1", Title: "火法师"}
+	prop := model.Asset{ID: "asset-prop", Category: model.AssetCategoryProp, PrimaryVersionID: "prop-v1", Title: "霜璃雕像"}
+	bound := map[string]bool{"asset-fire": true}
+
+	matched := matchAutoCharacterAssets(model.AssetCandidateNameKey("中景：冰魔法师（霜璃）与 火法师 对峙，衣摆结霜"), []model.Asset{ice, fire, prop}, bound)
+	if len(matched) != 1 || matched[0].ID != "asset-ice" {
+		t.Fatalf("matched = %+v, want only asset-ice (fire already bound, prop wrong category)", matched)
+	}
+	if len(matchAutoCharacterAssets(model.AssetCandidateNameKey("空镜：雪原日落"), []model.Asset{ice}, bound)) != 0 {
+		t.Fatal("text without character title must not match")
+	}
+	if len(matchAutoCharacterAssets(model.AssetCandidateNameKey("他拿出 月 光石"), []model.Asset{{ID: "m", Category: model.AssetCategoryCharacter, Title: "月"}}, bound)) != 0 {
+		t.Fatal("single-rune core name must not match")
+	}
+}
+
 func TestRenderAllProjectShotsStopsOnFailure(t *testing.T) {
 	service, _ := newRenderAllTestService(t)
 	gateway := &fakeGateway{failShotN: 2}

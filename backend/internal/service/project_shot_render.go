@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"infinite-canvas/backend/internal/model"
 )
@@ -183,6 +184,7 @@ func (s *Service) renderProjectShot(ctx context.Context, gateway *gatewayClient,
 			delete(video, "first_frame") // 草稿没有 image 阶段，纯文生视频
 		}
 	}
+	references = s.autoShotCharacterReferences(userID, projectID, shot, revision, references)
 	paths, cleanup, resolveErr := s.resolveShotReferencePaths(userID, references)
 	defer cleanup()
 	if resolveErr != nil {
@@ -269,6 +271,66 @@ func (s *Service) shotVoiceKey(userID string, references []model.ShotAssetRefere
 		return profile.VoiceKey
 	}
 	return ""
+}
+
+// autoShotCharacterReferences 分镜文本（标题+image/video 提示词+画面描述）命中角色资产
+// title 核心名（去括号/空格）而该角色尚未绑定时，临时补挂其最新 ready 版本作为参考；
+// 只作用于本次渲染，不写库、不改手动绑定。与前端 buildShotAssetReferenceContext 同规则。
+func (s *Service) autoShotCharacterReferences(userID string, projectID string, shot *model.Shot, revision *model.ShotRevision, references []model.ShotAssetReference) []model.ShotAssetReference {
+	textKey := model.AssetCandidateNameKey(strings.Join([]string{shot.Title, revision.ImagePrompt, revision.VideoPrompt, revision.PlotDescription}, "\n"))
+	if utf8.RuneCountInString(textKey) < 2 {
+		return references
+	}
+	assets, err := s.repo.ProjectAssets(userID, projectID)
+	if err != nil {
+		return references // 查询失败不阻断渲染，退化为仅手动绑定
+	}
+	bound := make(map[string]bool, len(references))
+	versionIDs := make([]string, 0, len(references))
+	for _, reference := range references {
+		versionIDs = append(versionIDs, reference.AssetVersionID)
+	}
+	if versions, versionsErr := s.repo.ProjectAssetVersionsByIDs(projectID, versionIDs); versionsErr == nil {
+		for _, version := range versions {
+			bound[version.AssetID] = true
+		}
+	}
+	augmented := references
+	for _, asset := range matchAutoCharacterAssets(textKey, assets, bound) {
+		// 角色版本均以 confirmed 落库；取版本号最大的 ready 版本，主版本兜底
+		versionID := strings.TrimSpace(asset.PrimaryVersionID)
+		if versions, versionsErr := s.repo.AssetVersions(asset.ID); versionsErr == nil {
+			for _, version := range versions {
+				if version.Status == model.AssetVersionStatusConfirmed && strings.TrimSpace(version.ID) != "" {
+					versionID = version.ID
+					break
+				}
+			}
+		}
+		if versionID == "" {
+			continue
+		}
+		augmented = append(augmented, model.ShotAssetReference{ID: "auto:" + asset.ID, ShotID: shot.ID, AssetVersionID: versionID, Role: "reference", Status: "linked"})
+	}
+	return augmented
+}
+
+// matchAutoCharacterAssets 保守匹配：角色 title 归一化（仅字母数字）后完整出现在归一化分镜文本中，
+// 且该角色未绑定过；短于 2 字的核心名不参与，避免误伤。
+func matchAutoCharacterAssets(textKey string, assets []model.Asset, boundAssetIDs map[string]bool) []model.Asset {
+	matched := make([]model.Asset, 0, 2)
+	for _, asset := range assets {
+		if asset.Category != model.AssetCategoryCharacter || boundAssetIDs[asset.ID] {
+			continue
+		}
+		core := model.AssetCandidateNameKey(asset.Title)
+		if utf8.RuneCountInString(core) < 2 || !strings.Contains(textKey, core) {
+			continue
+		}
+		boundAssetIDs[asset.ID] = true
+		matched = append(matched, asset)
+	}
+	return matched
 }
 
 // resolveShotReferencePaths 把镜头引用的资产版本解析成本地文件路径供 gateway refs 使用。
