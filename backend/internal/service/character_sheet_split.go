@@ -17,8 +17,9 @@ import (
 )
 
 // 角色三视图定妆常被做成「特写|正面|侧面|背面」四格横幅拼图；整张作为单个
-// 编辑参考发给生图模型会把四格人物平均，还原变差。这里做一次保守的自动裁切：
-// 只在证据充分（≥3 个有效面板）时裁出前两格（特写+正面），任何失败都退回原图。
+// 编辑参考发给生图模型会把四格人物平均，还原变差。这里做自动裁切：
+// 证据充分（≥3 个有效面板）时裁出全部格（特写/正面/侧面/背面…），
+// 任何失败都退回原图。
 const (
 	sheetMinWidth          = 600 // 拼图必为宽幅横幅
 	sheetMinPanelWidth     = 100 // 单格最小宽度
@@ -115,8 +116,8 @@ func splitCharacterSheetImage(src image.Image) ([]image.Image, bool) {
 	if len(panels) < sheetMinValidPanels {
 		return nil, false
 	}
-	crops := make([]image.Image, 0, 2)
-	for _, panel := range panels[:2] {
+	crops := make([]image.Image, 0, len(panels))
+	for _, panel := range panels {
 		rect := image.Rect(bounds.Min.X+panel.start, bounds.Min.Y, bounds.Min.X+panel.end, bounds.Min.Y+height)
 		crop := image.NewRGBA(image.Rect(0, 0, panel.end-panel.start, height))
 		draw.Draw(crop, crop.Bounds(), src, rect.Min, draw.Src)
@@ -239,7 +240,8 @@ func splitCharacterSheetReference(item protocol.MediaReference) ([]protocol.Medi
 		return nil, false
 	}
 	fmt.Printf("[sheet-split] split ok: %d panels\n", len(pngs))
-	suffixes := []string{"_closeup", "_front"}
+	suffixes := []string{"_closeup", "_front", "_side", "_back",
+		"_view5", "_view6", "_view7", "_view8"}
 	split := make([]protocol.MediaReference, 0, len(pngs))
 	for index, pngBytes := range pngs {
 		panel := item

@@ -74,8 +74,8 @@ func TestSplitCharacterSheetFourPanels(t *testing.T) {
 	if !ok {
 		t.Fatal("expected four-panel sheet to be split")
 	}
-	if len(panels) != 2 {
-		t.Fatalf("expected 2 panels (closeup+front), got %d", len(panels))
+	if len(panels) != 4 {
+		t.Fatalf("expected 4 panels (all views), got %d", len(panels))
 	}
 	for i, panel := range panels {
 		img := decodeDataURLImage(t, panel)
@@ -86,7 +86,7 @@ func TestSplitCharacterSheetFourPanels(t *testing.T) {
 			t.Fatalf("panel %d height = %d, want 400", i, got)
 		}
 	}
-	// 两格颜色基调不同，确认确实裁到了不同的格。
+	// 各格颜色基调不同，确认确实裁到了不同的格。
 	first := decodeDataURLImage(t, panels[0]).At(10, 10)
 	second := decodeDataURLImage(t, panels[1]).At(10, 10)
 	if first == second {
@@ -139,11 +139,14 @@ func TestSplitCharacterSheetReferenceWiring(t *testing.T) {
 		Metadata: map[string]any{"width": 1224, "height": 400},
 	}
 	split, ok := splitCharacterSheetReference(item)
-	if !ok || len(split) != 2 {
-		t.Fatalf("expected split into 2 references, ok=%v len=%d", ok, len(split))
+	if !ok || len(split) != 4 {
+		t.Fatalf("expected split into 4 references (all views), ok=%v len=%d", ok, len(split))
 	}
-	if split[0].Name != "sheet.png_closeup" || split[1].Name != "sheet.png_front" {
-		t.Fatalf("unexpected names: %q %q", split[0].Name, split[1].Name)
+	wantNames := []string{"sheet.png_closeup", "sheet.png_front", "sheet.png_side", "sheet.png_back"}
+	for i, want := range wantNames {
+		if split[i].Name != want {
+			t.Fatalf("panel %d name = %q, want %q", i, split[i].Name, want)
+		}
 	}
 	if split[0].Role != "edit_source" || split[0].Order != 2 || split[0].Kind != "image" {
 		t.Fatalf("role/order/kind must be preserved, got %+v", split[0])
