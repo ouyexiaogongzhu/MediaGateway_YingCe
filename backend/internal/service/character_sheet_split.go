@@ -18,8 +18,8 @@ import (
 const (
 	sheetMinWidth          = 600 // 拼图必为宽幅横幅
 	sheetMinPanelWidth     = 100 // 单格最小宽度
-	sheetMinSeparatorWidth = 4   // 格间留白至少这么宽才算分隔线（滤掉面板内部的偶发匀色列）
-	sheetBlankDiffPerPair  = 6   // 相邻采样像素灰度差平均值 ≤6 视为留白列
+	sheetMinSeparatorWidth = 1   // 真实拼图的分隔线可能仅 1-3px 细亮线；误报由「均匀+近白/近背景」双条件兜底
+	sheetBlankDiffPerPair  = 24  // 列内相邻采样灰度差 ≤24 视为匀色（分隔线自带竖向渐晕，实测 maxDiff 15-22）
 	sheetMinValidPanels    = 3   // 至少 3 格才认定是拼图
 )
 
@@ -103,12 +103,10 @@ func splitCharacterSheetImage(src image.Image) ([]image.Image, bool) {
 	return crops, true
 }
 
-// sheetBlankColumns 判定「留白列」：整列均匀（相邻采样灰度差低）且满足其一——
-//   - 近白（亮度 ≥200 且色散小）：定妆拼图惯例的白/浅色分隔带；或
-//   - 接近四角一致背景色（深色/彩色底拼图，四角必然是背景）。
-//
-// 只用「列内梯度」不行：真实三视图整张都是平滑渐变，人物色块列与留白列
-// 梯度一样低，会把全部列误判为留白导致永不裁切。
+// sheetBlankColumns 判定「分隔列」：整列均匀（列内相邻采样灰度差 ≤24），且
+// 左右两侧 32-96px 窗口的内容均值色都与该列均值的最大通道差 ≥25 ——
+// 面板内部的匀色列两侧是同类内容，天然不会成为分隔候选；
+// 不做任何背景色估计（摄影灰底的渐晕会让固定/插值背景全部失配）。
 func sheetBlankColumns(src image.Image) []bool {
 	bounds := src.Bounds()
 	width, height := bounds.Dx(), bounds.Dy()
@@ -116,39 +114,17 @@ func sheetBlankColumns(src image.Image) []bool {
 	if step < 1 {
 		step = 1
 	}
-	// 四角各 8x8 的中位色：一致时才作为背景参考（格子顶边时四角各在人物里，不可靠）
-	var corners [4][3]int
-	ci := 0
-	for _, cx := range []int{bounds.Min.X, bounds.Max.X - 9} {
-		for _, cy := range []int{bounds.Min.Y, bounds.Max.Y - 9} {
-			var r, g, b int
-			for dy := 0; dy < 8; dy++ {
-				for dx := 0; dx < 8; dx++ {
-					pr, pg, pb, _ := src.At(cx+dx, cy+dy).RGBA()
-					r += int(pr >> 8)
-					g += int(pg >> 8)
-					b += int(pb >> 8)
-				}
-			}
-			corners[ci] = [3]int{r / 64, g / 64, b / 64}
-			ci++
-		}
-	}
-	cornersAgree := func(a, b [3]int) bool {
-		return abs(a[0]-b[0]) <= 24 && abs(a[1]-b[1]) <= 24 && abs(a[2]-b[2]) <= 24
-	}
-	hasBg := cornersAgree(corners[0], corners[1]) && cornersAgree(corners[1], corners[2]) &&
-		cornersAgree(corners[2], corners[3])
-	bg := corners[0]
-
-	blank := make([]bool, width)
+	mean := make([][3]int, width)
+	uniform := make([]bool, width)
 	for x := 0; x < width; x++ {
-		samples, maxDiff, minLum, maxLum := 0, 0, 1<<30, 0
-		nearBg := true
-		prev := -1
+		var sum [3]int
+		maxDiff, prev, n := 0, -1, 0
 		for y := 0; y < height; y += step {
 			r, g, b, _ := src.At(bounds.Min.X+x, bounds.Min.Y+y).RGBA()
 			r8, g8, b8 := int(r>>8), int(g>>8), int(b>>8)
+			sum[0] += r8
+			sum[1] += g8
+			sum[2] += b8
 			lum := (r8*299 + g8*587 + b8*114) / 1000
 			if prev >= 0 {
 				d := lum - prev
@@ -159,24 +135,45 @@ func sheetBlankColumns(src image.Image) []bool {
 					maxDiff = d
 				}
 			}
-			if lum < minLum {
-				minLum = lum
-			}
-			if lum > maxLum {
-				maxLum = lum
-			}
-			if hasBg {
-				dr, dg, db := r8-bg[0], g8-bg[1], b8-bg[2]
-				if abs(dr) > 24 || abs(dg) > 24 || abs(db) > 24 {
-					nearBg = false
-				}
-			}
-			samples++
 			prev = lum
+			n++
 		}
-		uniform := samples > 0 && maxDiff <= sheetBlankDiffPerPair
-		nearWhite := minLum >= 200 && maxLum-minLum <= 32
-		blank[x] = uniform && (nearWhite || (hasBg && nearBg))
+		mean[x] = [3]int{sum[0] / n, sum[1] / n, sum[2] / n}
+		uniform[x] = n > 0 && maxDiff <= sheetBlankDiffPerPair
+	}
+	chDelta := func(a, b [3]int) int {
+		dr, dg, db := a[0]-b[0], a[1]-b[1], a[2]-b[2]
+		m := dr
+		if abs(dg) > m {
+			m = abs(dg)
+		}
+		if abs(db) > m {
+			m = abs(db)
+		}
+		if m < 0 {
+			m = -m
+		}
+		return m
+	}
+	const winNear, winFar = 32, 96
+	blank := make([]bool, width)
+	for x := 0; x < width; x++ {
+		if !uniform[x] {
+			continue
+		}
+		lo, hi := x-winFar, x+winFar
+		if lo < bounds.Min.X {
+			lo = bounds.Min.X
+		}
+		if hi > bounds.Max.X-1 {
+			hi = bounds.Max.X - 1
+		}
+		leftMean := mean[lo]
+		rightMean := mean[hi]
+		// 两侧窗口远离候选列，取窗口最远端均值做对比
+		if chDelta(mean[x], leftMean) >= 25 && chDelta(mean[x], rightMean) >= 25 {
+			blank[x] = true
+		}
 	}
 	return blank
 }
