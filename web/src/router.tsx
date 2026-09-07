@@ -51,6 +51,7 @@ const ProjectsPage = lazy(loadProjectsPage);
 const ProjectDetailPage = lazy(() => import("@/pages/projects/detail"));
 const SettingsPage = lazy(() => import("@/pages/settings"));
 const TestVoiceRecording = lazy(() => import("@/pages/test-voice-recording"));
+const ToolsUpscalePage = lazy(() => import("@/pages/tools/upscale"));
 
 function deferred(element: ReactNode) {
     return <Suspense fallback={<WorkspaceRouteLoader />}>{element}</Suspense>;
@@ -135,6 +136,7 @@ export const router = createBrowserRouter([
             },
             { path: "/settings", element: <RequireAuth>{deferred(<SettingsPage />)}</RequireAuth> },
             { path: "/test-voice-recording", element: <RequireAuth>{deferred(<TestVoiceRecording />)}</RequireAuth> },
+            { path: "/tools/upscale", element: <RequireAuth>{deferred(<ToolsUpscalePage />)}</RequireAuth> },
             {
                 path: "/projects",
                 element: (

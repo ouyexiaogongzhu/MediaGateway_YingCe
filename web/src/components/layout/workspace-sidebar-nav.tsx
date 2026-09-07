@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, Home, Infinity as InfinityIcon, LogOut, PanelLeftOpen, Plus, Search, ShieldCheck } from "lucide-react";
+import { ChevronDown, ChevronRight, Home, Infinity as InfinityIcon, LogOut, MonitorUp, PanelLeftOpen, Plus, Search, ShieldCheck } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ComponentType, type CSSProperties } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
 
@@ -51,6 +51,7 @@ function buildNav(features: FeatureAvailability, balance: string, isAdmin: boole
                 toolItem("canvas", "/canvas"),
                 ...(features.taskCenterEnabled ? [toolItem("tasks", "/tasks")] : []),
                 toolItem("assets", "/assets"),
+                { id: "tools-upscale", title: "视频超分", icon: MonitorUp, to: "/tools/upscale" },
             ],
         },
         {

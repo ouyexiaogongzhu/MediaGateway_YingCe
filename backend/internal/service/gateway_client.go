@@ -145,6 +145,12 @@ func (c *gatewayClient) wait(ctx context.Context, jobID string) (*gatewayJob, er
 	}
 }
 
+// MediaGatewayBaseURL 供 handler 层薄代理（如 /api/tools/upscale）取网关地址，
+// 与 gatewayClient 共用 CANVAS_MEDIA_GATEWAY_URL 覆盖逻辑。
+func MediaGatewayBaseURL() string {
+	return newGatewayClientFromEnv().baseURL
+}
+
 func (s *Service) mediaGateway() *gatewayClient {
 	if s.mediaGatewayClient != nil {
 		return s.mediaGatewayClient
