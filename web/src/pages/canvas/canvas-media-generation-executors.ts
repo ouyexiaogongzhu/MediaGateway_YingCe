@@ -22,6 +22,7 @@ export async function executeVideoGeneration({
     generationContext,
     controller,
     projectId,
+    canvasNodes,
     canvasConnections,
     setNodes,
     setConnections,
@@ -107,6 +108,7 @@ export async function executeVideoGeneration({
                 referenceVideos: generationContext.referenceVideos,
                 referenceAudios: generationContext.referenceAudios,
                 signal: controller.signal,
+                videoInput: storyboardVideoInput(sourceNode, canvasNodes),
                 metadata: {
                     sourceNodeId: nodeId,
                     ...taskContext,
@@ -189,4 +191,21 @@ export async function executeAudioGeneration({
     } finally {
         finishGenerationRequest(audioId, controller);
     }
+}
+
+// 分镜流程（workflowKind "shot"）的 canvas_video 协议字段：首帧取分镜图 content 原样传；
+// 有对白 → mute_audio false，无对白 → true；单视频节点直接生成路径不带这些字段。
+export function storyboardVideoInput(sourceNode: CanvasNodeData | undefined, canvasNodes: CanvasNodeData[]) {
+    const metadata = sourceNode?.metadata?.workflowKind === "shot" ? sourceNode.metadata : undefined;
+    if (!metadata) return undefined;
+    const dialogue = (metadata.storyboardDialogue || "").trim();
+    const startFrameNodeId = metadata.videoStartFrameNodeId;
+    const firstFrameImage = startFrameNodeId
+        ? canvasNodes.find((node) => node.id === startFrameNodeId && node.type === CanvasNodeType.Image && node.metadata?.content)?.metadata?.content
+        : undefined;
+    return {
+        ...(firstFrameImage ? { first_frame_image: firstFrameImage } : {}),
+        mute_audio: !dialogue,
+        ...(dialogue ? { dialogue } : {}),
+    };
 }

@@ -397,6 +397,8 @@ export type CanvasNodeMetadata = {
     storyboardShotDuration?: StoryboardShotDuration;
     storyboardShotCount?: StoryboardShotCount;
     storyboardVideoInputMode?: StoryboardVideoInputMode;
+    /** 分镜流程视频节点携带的镜头台词；提交 canvas_video 任务时决定 mute_audio/dialogue。 */
+    storyboardDialogue?: string;
     storyboardComposerHeight?: number;
     storyboardVideoBatch?: StoryboardVideoBatchState;
     storyboardMusicBatch?: StoryboardMusicBatchState;

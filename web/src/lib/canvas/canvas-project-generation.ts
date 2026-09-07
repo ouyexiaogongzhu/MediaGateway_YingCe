@@ -19,21 +19,11 @@ import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
 
 export async function runBackendCanvasGenerationTask(
     {
-        projectId,
         nodeId,
         mode,
-        prompt,
-        config,
-        referenceImages = [],
-        referenceVideos = [],
-        referenceAudios = [],
-        mask,
-        signal,
-        metadata,
         onTaskCreated,
-        clientOperationId,
-        retryOf,
-        attemptGroupId,
+        metadata,
+        ...rest
     }: {
         projectId: string;
         nodeId: string;
@@ -50,26 +40,18 @@ export async function runBackendCanvasGenerationTask(
         clientOperationId?: string;
         retryOf?: string;
         attemptGroupId?: string;
+        videoInput?: Parameters<typeof runBackendGenerationTask>[0]["videoInput"];
     },
     dependencies?: GenerationTaskDependencies,
 ) {
-    if (mode === "image") assertCanvasImageReferenceLimit(config, referenceImages);
+    if (mode === "image") assertCanvasImageReferenceLimit(rest.config, rest.referenceImages || []);
+    // 其余字段 rest 透传，新增选项不再需要在这里手抄一遍（漏抄=静默丢字段）。
     return runBackendGenerationTask(
         {
-            projectId,
+            ...rest,
             mode,
-            prompt,
-            config,
-            referenceImages,
-            referenceVideos,
-            referenceAudios,
-            mask,
-            signal,
             metadata: { nodeId, ...(mode === "video" && !metadata?.videoEditOperation ? { videoEditOperation: "image_to_video" } : {}), ...metadata },
             onTaskUpdate: onTaskCreated,
-            clientOperationId,
-            retryOf,
-            attemptGroupId,
         },
         dependencies,
     );

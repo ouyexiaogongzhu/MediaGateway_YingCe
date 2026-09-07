@@ -205,7 +205,11 @@ func (w *taskWorkerCoordinator) processClaimedTask(task *model.Task) error {
 		_, terminalErr := terminal.handleResultPersistenceFailure(task, err)
 		return terminalErr
 	}
-	return terminal.handleSuccess(task)
+	successErr := terminal.handleSuccess(task)
+	if successErr == nil {
+		s.maybeScheduleCanvasVideoAudioPostProcess(*task, ctx)
+	}
+	return successErr
 }
 
 func taskUsesUpstreamReportedProgress(taskType string) bool {

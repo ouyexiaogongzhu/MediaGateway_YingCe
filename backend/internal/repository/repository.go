@@ -551,6 +551,14 @@ func (r *Repository) UpdateTaskTerminalState(id string, expected model.TaskStatu
 	return result.RowsAffected == 1, result.Error
 }
 
+// UpdateTaskResultIfSucceeded 只改已完成任务的 result_json，供视频音频后处理回写最终产物；
+// 条件更新保证不会覆盖未完成任务或其他终态。
+func (r *Repository) UpdateTaskResultIfSucceeded(id string, resultJSON string) error {
+	return r.db.Model(&model.Task{}).
+		Where("id = ? AND status = ?", id, model.TaskStatusSucceeded).
+		Update("result_json", resultJSON).Error
+}
+
 func (r *Repository) CancelTaskIfStatus(userID string, id string, expected model.TaskStatus, now time.Time) (bool, error) {
 	result := r.db.Model(&model.Task{}).
 		Where("id = ? AND user_id = ? AND status = ?", id, userID, expected).

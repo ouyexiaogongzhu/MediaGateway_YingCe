@@ -3,6 +3,7 @@ import { App } from "antd";
 
 import { buildNodeGenerationContext, hydrateNodeGenerationContext } from "@/components/canvas/canvas-node-generation";
 import type { CanvasNodeGenerationMode } from "@/components/canvas/canvas-node-prompt-panel";
+import { storyboardVideoInput } from "@/pages/canvas/canvas-media-generation-executors";
 import { buildEmotionImageArtifacts, emotionGenerationSize, emotionProviderMask, normalizeEmotionPromptForProvider, resolveEmotionEditPlan } from "@/lib/canvas/canvas-emotion";
 import {
     buildAudioGenerationMetadata,
@@ -284,6 +285,7 @@ export function useCanvasGenerationRetry({
                         referenceVideos: videoContext?.referenceVideos || [],
                         referenceAudios: videoContext?.referenceAudios || [],
                         signal: controller.signal,
+                        videoInput: storyboardVideoInput(node, nodesRef.current),
                         metadata: {
                             retry: true,
                             sourceNodeId: sourceNode.id,

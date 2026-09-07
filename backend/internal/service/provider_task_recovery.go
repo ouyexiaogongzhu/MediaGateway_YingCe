@@ -104,7 +104,9 @@ func (s *Service) queryFailedVideoTask(ctx context.Context, task *model.Task, cl
 	if err != nil {
 		return nil, err
 	}
-	adapter, declarative := declarativeProtocolAdapterForContext(ctx, config.InterfaceType)
+	// 与 runVideoTask 同一套适配器选择：newapi 强制宿主内置适配器，保证恢复查询的
+	// poll/result 与当初创建任务的协议契约一致，不随插件安装状态漂移。
+	adapter, declarative := videoProtocolAdapter(ctx, config.InterfaceType)
 	if !declarative && config.InterfaceType != string(model.ChannelInterfaceNewAPIChannel2) {
 		return nil, BadAuthRequest("该任务的请求协议不支持安全查询上游状态")
 	}
@@ -193,6 +195,7 @@ func (s *Service) queryFailedVideoTask(ctx context.Context, task *model.Task, cl
 		return nil, fmt.Errorf("任务已恢复并完成扣费，但项目素材登记失败：%w", err)
 	}
 	_ = s.log(task.UserID, task.ID, "info", "人工查询确认生成成功，任务已恢复、完成结算并登记项目产物", providerStatus)
+	s.maybeScheduleCanvasVideoAudioPostProcess(*task, recoveryCtx)
 	return &ProviderTaskQueryResult{Task: taskForOutput(*task), ProviderStatus: providerStatus, Recovered: true, BillingSettled: billingSettled}, nil
 }
 

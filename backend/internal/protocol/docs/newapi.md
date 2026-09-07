@@ -21,7 +21,7 @@ Content-Type: multipart/form-data
 
 {{PARAMETERS}}
 
-`duration -> seconds`，发送为十进制字符串；`aspectRatio -> size`，这里应填写上游尺寸而不是只写 `16:9`；`images -> input_reference` multipart 部件。空字段不发送。
+`duration -> seconds`，发送为十进制字符串；`aspectRatio -> size`，这里应填写上游尺寸而不是只写 `16:9`；`images -> input_images` 多值 multipart 字段（每张参考图重复一次字段名，dataURL/URL 原样）。空字段不发送。
 
 ## 文生视频示例
 
@@ -43,7 +43,7 @@ curl -X POST "{channel_base_url}/v1/videos" \
   -F "prompt=保持参考图人物一致，镜头从中景推进到特写" \
   -F "seconds=8" \
   -F "size=720x1280" \
-  -F "input_reference=@character.png"
+  -F "input_images=@character.png"
 ```
 
 ## 创建、轮询与下载

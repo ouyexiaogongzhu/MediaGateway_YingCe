@@ -48,6 +48,8 @@ type BackendGenerationTaskOptions = {
     retryOf?: string;
     retryContextsByBatchIndex?: Array<{ retryOf: string; attemptGroupId: string; clientOperationId: string }>;
     attemptGroupId?: string;
+    /** canvas_video 任务 input_json 顶层的分镜协议字段（first_frame_image/mute_audio/dialogue/bgm_prompt），原样透传 Gateway。 */
+    videoInput?: { first_frame_image?: string; mute_audio?: boolean; dialogue?: string; bgm_prompt?: string };
 };
 
 export type GenerationTaskDependencies = {
@@ -76,8 +78,12 @@ type PreparedGenerationReferences = {
 };
 
 // 生成、计费、取消和任务记录必须共用后端任务生命周期，页面层不能再直连供应商。
+// 入参整体透传给 createAndWaitGenerationTask，不再手抄字段清单（抄一份漏一个=丢字段 bug）。
 export async function runBackendGenerationTask(
-    {
+    options: BackendGenerationTaskOptions,
+    dependencies: GenerationTaskDependencies = defaultDependencies,
+) {
+    const {
         projectId,
         mode,
         prompt,
@@ -95,9 +101,7 @@ export async function runBackendGenerationTask(
         clientOperationId,
         retryOf,
         attemptGroupId,
-    }: BackendGenerationTaskOptions,
-    dependencies: GenerationTaskDependencies = defaultDependencies,
-) {
+    } = options;
     throwIfAborted(signal);
     assertClientPromptLimit(mode, prompt, config, metadata);
     if (usesLocalDreamina(config)) {
@@ -111,7 +115,7 @@ export async function runBackendGenerationTask(
     assertBackendRuntimeConfigured(config, mode);
     const prepared = await prepareGenerationReferences({ referenceImages, referenceVideos, referenceAudios, mask });
     throwIfAborted(signal);
-    return createAndWaitGenerationTask({ projectId, mode, prompt, config, referenceImages, referenceVideos, referenceAudios, textHistory, signal, metadata, onTaskUpdate }, prepared, dependencies);
+    return createAndWaitGenerationTask(options, prepared, dependencies);
 }
 
 // 分镜等后台生产流程只需要可靠提交任务；任务状态与产物由项目工作区轮询和
@@ -435,6 +439,7 @@ async function createBackendGenerationTask(options: BackendGenerationTaskOptions
         input: {
             mode,
             prompt,
+            ...(mode === "video" && options.videoInput ? options.videoInput : {}),
             ...(workflow ? { execution: workflowPublicExecution(workflow) } : {}),
             config: backendProviderConfig(config, mode),
             capabilityOptions: logicalModelId ? logicalCapabilityOptions(config, mode) : undefined,

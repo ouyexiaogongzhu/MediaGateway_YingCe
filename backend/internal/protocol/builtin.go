@@ -18,6 +18,7 @@ type builtinAdapter struct {
 	poll        func(PollContext) (RequestSpec, error)
 	parsePoll   func(PollContext, map[string]any) (PollResult, error)
 	cancel      func(PollContext) (RequestSpec, error)
+	result      func(PollContext) (RequestSpec, error)
 }
 
 func (a builtinAdapter) Metadata() Metadata { return a.info }
@@ -59,6 +60,16 @@ func (a builtinAdapter) BuildCancel(_ context.Context, c PollContext) (RequestSp
 	}
 	return a.cancel(c)
 }
+
+// BuildResult 解析异步任务成功后的二进制产物；仅声明了 result 操作的适配器可用。
+func (a builtinAdapter) BuildResult(_ context.Context, c PollContext) (RequestSpec, error) {
+	if a.result == nil {
+		return RequestSpec{}, unavailable(a.info)
+	}
+	return a.result(c)
+}
+
+func (a builtinAdapter) ResultAvailable() bool { return a.result != nil }
 
 var builtinRegistry *Registry
 var builtinRegistryMu sync.Mutex
@@ -290,7 +301,15 @@ func openAIVideosAdapter() Adapter {
 			body["size"] = r.AspectRatio
 		}
 		if len(r.Images) > 0 {
-			body["input_reference"] = mediaValues(r.Images)
+			// 全部参考图逐张放进多值字段 input_images；protocolFormValues 展开为重复表单字段。
+			body["input_images"] = mediaValues(r.Images)
+		}
+		if value, ok := r.Extra["firstFrameImage"].(string); ok && value != "" {
+			body["first_frame_image"] = value
+		}
+		if value, ok := r.Extra["muteAudio"].(bool); ok {
+			// multipart 序列化时由 protocolFormValues 转成 "true"/"false" 字符串。
+			body["mute_audio"] = value
 		}
 		return RequestSpec{Method: http.MethodPost, Path: "/v1/videos", ContentType: "multipart/form-data", Body: body}, nil
 	})
@@ -298,6 +317,11 @@ func openAIVideosAdapter() Adapter {
 		ba.cancel = func(c PollContext) (RequestSpec, error) {
 			return RequestSpec{Method: http.MethodPost,
 				Path: "/v1/videos/" + url.PathEscape(c.TaskID) + "/cancel"}, nil
+		}
+		ba.result = func(c PollContext) (RequestSpec, error) {
+			return RequestSpec{Method: http.MethodGet,
+				Path:        "/v1/videos/" + url.PathEscape(c.TaskID) + "/content",
+				ContentType: "application/json", Headers: map[string]string{"Accept": "video/mp4"}}, nil
 		}
 		return ba
 	}
@@ -308,7 +332,7 @@ func openAIVideoParams() []Parameter {
 	return []Parameter{
 		{Name: "model", Type: "string", Required: true, Mapping: "model", Description: "Sora 等视频模型标识。"},
 		{Name: "prompt", Type: "string", Required: true, Mapping: "prompt", Description: "视频生成提示词。"},
-		{Name: "images", Type: "media[]", Mapping: "input_reference", Description: "可选参考图，作为 multipart 文件上传到 input_reference。"},
+		{Name: "images", Type: "media[]", Mapping: "input_images", Description: "可选参考图，全部作为 input_images 多值表单字段发送（dataURL/URL 原样）。"},
 		{Name: "duration", Type: "integer", Mapping: "seconds", Description: "视频时长，单位为秒。"},
 		{Name: "aspectRatio", Type: "string", Mapping: "size", Description: "视频尺寸，例如 1280x720；该协议使用 size 而不是独立的 aspect_ratio。"},
 		{Name: "videos", Type: "media[]", Mapping: "unsupported", Description: "OpenAI Videos 当前适配器不发送参考视频。"},

@@ -35,6 +35,23 @@ describe("workflow shot asset references", () => {
         expect(prompt.match(/@\[asset:asset-character\]/g)).toHaveLength(1);
         expect(prompt).toContain("【场景与道具参考】\n雨夜街道：@[asset:asset-scene]");
     });
+
+    test("auto-adds unbound characters whose title appears in the shot text", () => {
+        const context = buildShotAssetReferenceContext(detailWithIceMage(), "shot-1");
+
+        expect(context.referenceImages.map((image) => image.id)).toEqual(["asset-scene", "asset-character", "asset-ice"]);
+        expect(context.resolvedCharacterVersions).toContainEqual({ assetId: "asset-ice", versionId: "version-ice" });
+    });
+
+    test("does not duplicate characters already bound or absent from the shot text", () => {
+        const detail = detailWithIceMage();
+        detail.shotReferences = [...(detail.shotReferences || []), { id: "reference-ice", shotId: "shot-1", assetVersionId: "version-ice", role: "reference", status: "linked", createdAt: "2026-08-29T00:00:04Z" }];
+        const bound = buildShotAssetReferenceContext(detail, "shot-1");
+        expect(bound.referenceImages.map((image) => image.id)).toEqual(["asset-scene", "asset-character", "asset-ice"]);
+
+        const other = buildShotAssetReferenceContext(detailWithIceMage(), "shot-2");
+        expect(other.referenceImages.map((image) => image.id)).toEqual(["asset-scene"]);
+    });
 });
 
 function detail(): ProjectDetail {
@@ -92,5 +109,35 @@ function detail(): ProjectDetail {
             { id: "reference-audio", shotId: "shot-1", assetVersionId: "version-audio", role: "reference", status: "linked", createdAt: "2026-08-29T00:00:02Z" },
             { id: "reference-other-shot", shotId: "shot-2", assetVersionId: "version-scene", role: "reference", status: "linked", createdAt: "2026-08-29T00:00:03Z" },
         ],
+    } as ProjectDetail;
+}
+
+function detailWithIceMage(): ProjectDetail {
+    const base = detail();
+    const ice = {
+        id: "asset-ice",
+        title: "冰魔法师（霜璃）",
+        mediaType: "entity",
+        category: "character",
+        status: "confirmed",
+        primaryVersionId: "version-ice",
+        versionCount: 1,
+        usages: [],
+        position: 3,
+        updatedAt: "2026-08-29T00:00:00Z",
+        character: {
+            versionId: "version-ice",
+            version: 1,
+            definition: {},
+            representations: [{ id: "representation-ice", resourceId: "ice-sheet", mediaType: "image", role: "turnaround_sheet" }],
+            visualStatus: "ready",
+            voiceStatus: "missing",
+        },
+    } satisfies ProjectAsset;
+    return {
+        ...base,
+        assets: [...(base.assets || []), ice],
+        shots: [{ id: "shot-1", projectId: "p", title: "冰湖对峙", position: 0, durationMs: 4000, status: "draft", createdAt: "", updatedAt: "" }, { id: "shot-2", projectId: "p", title: "空镜", position: 1, durationMs: 3000, status: "draft", createdAt: "", updatedAt: "" }],
+        shotRevisions: [{ id: "rev-1", shotId: "shot-1", version: 1, plotDescription: "冰魔法师霜璃 与火法师对峙", action: "", dialogue: "", shotSize: "", cameraAngle: "", cameraMovement: "", durationMs: 4000, imagePrompt: "冰魔法师霜璃 凝视对手", videoPrompt: "", negativePrompt: "", continuityNotes: "", actionBeatsJson: "[]", createdAt: "" }],
     } as ProjectDetail;
 }

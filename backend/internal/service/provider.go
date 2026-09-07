@@ -46,6 +46,11 @@ type canvasGenerationInput struct {
 	Mask            *providerMedia         `json:"mask"`
 	Metadata        map[string]interface{} `json:"metadata"`
 	AgentRequests   *agentToolRequests     `json:"agentRequests"`
+	// 画布视频可选分工字段（前端写在 input_json 顶层）：
+	FirstFrameImage string                 `json:"first_frame_image,omitempty"` // 首帧图（dataURL/URL 原样透传）
+	MuteAudio       *bool                  `json:"mute_audio,omitempty"`        // 视频原生音轨静音
+	Dialogue        string                 `json:"dialogue,omitempty"`          // 台词，任务成功后异步配音
+	BGMPrompt       string                 `json:"bgm_prompt,omitempty"`        // BGM 提示词，任务成功后异步配乐
 	ImageCapability *ImageCapabilityConfig `json:"-"`
 	StreamText      bool                   `json:"-"` // 分镜请求使用上游 SSE 保活；最终结构仍在流结束后统一校验。
 	MaxOutputTokens int                    `json:"-"`
@@ -2415,6 +2420,12 @@ func protocolRequestFromInput(input canvasGenerationInput) protocol.GenerationRe
 			"count":        input.Config.Count,
 		},
 	}
+	if firstFrame := strings.TrimSpace(input.FirstFrameImage); firstFrame != "" {
+		request.Extra["firstFrameImage"] = firstFrame
+	}
+	if input.MuteAudio != nil {
+		request.Extra["muteAudio"] = *input.MuteAudio
+	}
 	for _, message := range input.TextHistory {
 		role := strings.ToLower(strings.TrimSpace(message.Role))
 		if role != "user" && role != "assistant" && role != "system" {
@@ -2657,6 +2668,10 @@ func protocolFormValues(value any) []string {
 			result = append(result, protocolFormValues(item)...)
 		}
 		return result
+	case []string:
+		// 多值表单字段（如 input_images）必须逐值展开；此前落到 default 分支被整体
+		// JSON 序列化成单个字段值，导致上游只能读到一张（或解析失败的）图片。
+		return typed
 	case string:
 		return []string{typed}
 	case bool:
@@ -3312,9 +3327,21 @@ func audioFormatMimeType(format string) string {
 	}
 }
 
+// videoProtocolAdapter 决定视频任务的声明式协议适配器。newapi(OpenAI Videos) 强制走宿主
+// 内置适配器：官方 openai-videos 插件的 create.files 用 $first 表达式只会把第一张参考图
+// 作为单个 multipart 文件上传（多参考图丢失根因），也无法透传 first_frame_image/mute_audio；
+// 宿主适配器按契约把全部参考图放进 input_images 多值字段。取消不走适配器：
+// provider_task_cancellation.go 对 newapi 硬编码 DELETE /v1/videos/{id}（MediaGateway 兼容层）。
+func videoProtocolAdapter(ctx context.Context, id string) (protocol.Adapter, bool) {
+	if strings.TrimSpace(id) == string(model.ChannelInterfaceNewAPIVideo) {
+		return protocol.Builtins().Get(string(model.ChannelInterfaceNewAPIVideo))
+	}
+	return declarativeProtocolAdapterForContext(ctx, id)
+}
+
 func runVideoTask(ctx context.Context, input canvasGenerationInput) (map[string]interface{}, error) {
-	if _, ok := declarativeProtocolAdapterForContext(ctx, input.Config.InterfaceType); ok {
-		return runDeclarativeProtocolTask(ctx, input)
+	if adapter, ok := videoProtocolAdapter(ctx, input.Config.InterfaceType); ok {
+		return runProtocolAdapterTask(ctx, input, adapter)
 	}
 	if input.Config.InterfaceType == string(model.ChannelInterfaceAgnesVideo) {
 		adapter, ok := protocolAdapterForContext(ctx, input.Config.InterfaceType)
