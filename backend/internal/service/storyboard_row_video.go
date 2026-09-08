@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -66,7 +65,7 @@ type storyboardRowCharacterRef struct {
 type rowVideoGateway interface {
 	CreateVideoJob(ctx context.Context, req rowVideoJobRequest) (string, error)
 	SynthesizeSpeech(ctx context.Context, voiceID string, text string, speed float64) (rowVideoSpeech, error)
-	CreateMixJob(ctx context.Context, videoJobID string, tracks []rowVideoMixTrack) (string, error)
+	CreateMixJob(ctx context.Context, videoJobID string, tracks []rowVideoMixTrack, keepSourceAudio bool) (string, error)
 	WaitJob(ctx context.Context, jobID string) (rowVideoJobResult, error)
 }
 
@@ -262,21 +261,13 @@ func runStoryboardRowVideo(ctx context.Context, gw rowVideoGateway, params rowVi
 	if prompt == "" {
 		return out, fmt.Errorf("分镜行缺少 videoMotionPrompt，无法生成视频")
 	}
-
-	wavPath := ""
+	// TTS 暂停（2026-09-08）：对白/旁白改 h3 原生说话——台词进 prompt，口型与其
+	// 自产音轨天然对齐；混音时保留源音轨。SynthesizeSpeech 代码保留，恢复 TTS 时回填。
 	if dialogue != "" {
-		speech, speechErr := gw.SynthesizeSpeech(ctx, params.VoiceKey, dialogue, params.Speed)
-		if speechErr != nil {
-			return out, fmt.Errorf("TTS 生成失败：%w", speechErr)
-		}
-		wavPath = speech.WavPath
-		out.TTSDuration = speech.DurationSeconds
-		defer os.Remove(wavPath) // mix 已在下方等待完成，wav 已被网关消费后才删除
+		prompt += "\n\n【台词】\n画面中的角色开口说出（口型与语音同步，声线贴合角色）：\n" + dialogue
 	}
+
 	out.Seconds = row.DurationSeconds
-	if out.TTSDuration > 0 {
-		out.Seconds = max(out.Seconds, int(math.Ceil(out.TTSDuration)))
-	}
 	if out.Seconds <= 0 {
 		out.Seconds = 1
 	}
@@ -287,14 +278,6 @@ func runStoryboardRowVideo(ctx context.Context, gw rowVideoGateway, params rowVi
 	}
 	if params.FirstFrameDataURL != "" {
 		request.ReferenceImages = []string{params.FirstFrameDataURL}
-	}
-	// 对白模式：wav 作为视频参考音轨驱动口型；旁白模式留给 mix 叠加。
-	if wavPath != "" && out.VoiceMode == "dialogue" {
-		audioDataURL, audioErr := localFileDataURL(wavPath, "audio/wav")
-		if audioErr != nil {
-			return out, fmt.Errorf("读取配音文件失败：%w", audioErr)
-		}
-		request.ReferenceAudios = []string{audioDataURL}
 	}
 	videoJobID, err := gw.CreateVideoJob(ctx, request)
 	if err != nil {
@@ -313,10 +296,8 @@ func runStoryboardRowVideo(ctx context.Context, gw rowVideoGateway, params rowVi
 		}
 		tracks = append(tracks, rowVideoMixTrack{SfxTag: tag, GainDB: 0, StartS: 0})
 	}
-	if wavPath != "" && out.VoiceMode == "voiceover" {
-		tracks = append(tracks, rowVideoMixTrack{Path: wavPath, GainDB: 0, StartS: 0})
-	}
-	mixJobID, err := gw.CreateMixJob(ctx, videoJobID, tracks)
+	// 有台词（对白/旁白）= h3 原生说了话 → 混音时保留源音轨；无台词行源音轨丢弃（h3 杂音）。
+	mixJobID, err := gw.CreateMixJob(ctx, videoJobID, tracks, dialogue != "")
 	if err != nil {
 		return out, fmt.Errorf("提交混音失败：%w", err)
 	}
@@ -382,8 +363,9 @@ func (c *gatewayClient) CreateVideoJob(ctx context.Context, req rowVideoJobReque
 	return c.postGatewayForID(ctx, "/v1/videos", req)
 }
 
-func (c *gatewayClient) CreateMixJob(ctx context.Context, videoJobID string, tracks []rowVideoMixTrack) (string, error) {
-	return c.postGatewayForID(ctx, "/v1/mix", map[string]any{"video_job_id": videoJobID, "tracks": tracks})
+func (c *gatewayClient) CreateMixJob(ctx context.Context, videoJobID string, tracks []rowVideoMixTrack, keepSourceAudio bool) (string, error) {
+	return c.postGatewayForID(ctx, "/v1/mix", map[string]any{
+		"video_job_id": videoJobID, "tracks": tracks, "keep_source_audio": keepSourceAudio})
 }
 
 func (c *gatewayClient) SynthesizeSpeech(ctx context.Context, voiceID string, text string, speed float64) (rowVideoSpeech, error) {
