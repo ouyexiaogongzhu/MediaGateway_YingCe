@@ -40,9 +40,17 @@ func storyboardPromptValues(brief string, requirements string, assets []storyboa
 	if shotDuration == 5 || shotDuration == 10 || shotDuration == 15 || shotDuration == 30 {
 		durationRule = fmt.Sprintf("本次生成单个镜头时长必须严格等于 %d 秒。", shotDuration)
 	}
-	countRule := fmt.Sprintf("镜头数量由模型按剧情节奏自动决定，但 shots 数组必须为 1 到 %d 个镜头，并优先使用完整表达剧情所需的最少镜头数。", maxStoryboardShots)
-	if shotCount >= 1 && shotCount <= 10 {
-		countRule = fmt.Sprintf("shots 数组必须严格输出 %d 个镜头。", shotCount)
+	step := shotDuration
+	if step != 5 && step != 10 && step != 15 && step != 30 {
+		step = 15
+	}
+	countRule := fmt.Sprintf(
+		"把剧情按时间轴连续切分：从 0:00 开始，每个镜头覆盖 %d 秒，相邻镜头时间区间首尾相接不重叠不留空隙；每个镜头必须在 shots 数组元素中输出 timeRange 字段，格式为「M:SS–M:SS」（如 0:15–0:30），按剧情实际长度估算总时长，不得把多段时间合并进一个镜头，shots 数组最多 %d 个。",
+		step, maxStoryboardShots)
+	if shotCount >= 1 {
+		countRule = fmt.Sprintf(
+			"shots 数组必须严格输出 %d 个镜头，从 0:00 开始按时间轴连续切分（每个镜头 %d 秒，相邻区间首尾相接），每个镜头必须在 shots 数组元素中输出 timeRange 字段，格式为「M:SS–M:SS」（如 0:15–0:30）。",
+			shotCount, step)
 	}
 	return map[string]string{
 		"项目名称": projectStyle.Title, "剧情": strings.TrimSpace(brief), "用户要求": strings.TrimSpace(requirements),
@@ -52,10 +60,11 @@ func storyboardPromptValues(brief string, requirements string, assets []storyboa
 }
 
 func storyboardOutputTokenLimit(shotCount int) int {
-	if shotCount >= 1 && shotCount <= 10 {
-		return min(12_000, 2_000+shotCount*800)
+	// ponytail: 32k 封顶按 qwen3.8 上下文余量估的；100 镜×~800tok 实际会被截断，超大批量应前端分批
+	if shotCount >= 1 {
+		return min(32_000, 2_000+shotCount*800)
 	}
-	return 12_000
+	return 32_000
 }
 
 // 兼容历史模板中强制真人媒介的冲突规则；项目画风才是视觉媒介的唯一来源。

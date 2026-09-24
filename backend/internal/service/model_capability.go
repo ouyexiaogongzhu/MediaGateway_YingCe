@@ -71,6 +71,7 @@ type VideoCapabilityConfig struct {
 	Duration          VideoDurationConfig  `json:"duration"`
 	DurationSupported *bool                `json:"durationSupported,omitempty"`
 	Ratios            []string             `json:"ratios"`
+	AllowCustomSize   bool                 `json:"allowCustomSize,omitempty"`
 	DefaultRatio      string               `json:"defaultRatio"`
 	Resolutions       []string             `json:"resolutions"`
 	DefaultResolution string               `json:"defaultResolution"`
@@ -716,7 +717,7 @@ func validateVideoTask(profile *VideoCapabilityConfig, input canvasGenerationInp
 	if err != nil || !videoDurationAllowed(profile.Duration, seconds) {
 		return BadAuthRequest("视频时长不在当前模型支持范围内")
 	}
-	if input.Config.Size != "" && !videoRatioAllowed(profile.Ratios, input.Config.Size) {
+	if input.Config.Size != "" && !videoRatioAllowed(profile.Ratios, input.Config.Size, profile.AllowCustomSize) {
 		return BadAuthRequest("画面比例不在当前模型支持范围内")
 	}
 	if len(profile.Resolutions) > 0 && !isAutomaticVideoResolution(input.Config.VQuality) && videoResolutionNameRequest(profile, input.Config.VQuality) == "" {
@@ -833,21 +834,23 @@ func videoDurationAllowed(value VideoDurationConfig, seconds int) bool {
 	return seconds >= value.Min && seconds <= value.Max && value.Step > 0 && (seconds-value.Min)%value.Step == 0
 }
 
-func videoRatioAllowed(options []string, value string) bool {
+func videoRatioAllowed(options []string, value string, allowCustom bool) bool {
 	value = strings.TrimSpace(strings.ToLower(strings.ReplaceAll(value, "×", "x")))
 	if containsCapabilityString(options, value) {
 		return true
 	}
-	parts := strings.Split(value, "x")
-	if len(parts) != 2 {
+	if allowCustom {
+		// 自定义画幅：像素整数，32 的下限对齐 h3 机械约束；上限挡住明显异常值，
+		// 模型专属上限（如 h3 乘积 ≤ 768*1344）由上游引擎报错。
+		if width, height, ok := parsePixelSize(value); ok && width >= 32 && height >= 32 && width <= 4096 && height <= 4096 {
+			return true
+		}
+	}
+	width, height, ok := parsePixelSize(value)
+	if !ok {
 		return false
 	}
-	width, widthErr := strconv.ParseFloat(parts[0], 64)
-	height, heightErr := strconv.ParseFloat(parts[1], 64)
-	if widthErr != nil || heightErr != nil || width <= 0 || height <= 0 {
-		return false
-	}
-	actual := width / height
+	actual := float64(width) / float64(height)
 	for _, option := range options {
 		candidate := ratioValue(option)
 		if candidate > 0 && absFloat(candidate-actual)/candidate < 0.01 {
@@ -855,6 +858,19 @@ func videoRatioAllowed(options []string, value string) bool {
 		}
 	}
 	return false
+}
+
+func parsePixelSize(value string) (int, int, bool) {
+	parts := strings.Split(value, "x")
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	width, widthErr := strconv.Atoi(strings.TrimSpace(parts[0]))
+	height, heightErr := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if widthErr != nil || heightErr != nil || width <= 0 || height <= 0 {
+		return 0, 0, false
+	}
+	return width, height, true
 }
 
 func ratioValue(value string) float64 {

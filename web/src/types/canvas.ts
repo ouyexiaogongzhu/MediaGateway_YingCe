@@ -51,7 +51,7 @@ export type CanvasToolMode = "move" | "box-select";
 export type CanvasFolderStyle = "glass" | "stacked" | "midnight" | "paper" | "cinema" | "compact";
 export type CanvasFolderTheme = "aurora" | "obsidian" | "ember" | "pearl";
 export type StoryboardShotDuration = "auto" | "5" | "10" | "15" | "30";
-export type StoryboardShotCount = "auto" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "10";
+export type StoryboardShotCount = "auto" | `${number}`;
 export type StoryboardVideoInputMode = "direct" | "keyframe";
 export type CanvasGenerationMode = "text" | "image" | "video" | "audio";
 export type CanvasGenerationBatchMode = "storyboard_image" | "storyboard_video" | "action_board";
@@ -65,6 +65,7 @@ export type CanvasSkillOutputMode = "text" | "json" | "image_prompt" | "workflow
 export type StoryboardColumn =
     | "shotNumber"
     | "durationSeconds"
+    | "timeRange"
     | "plotDescription"
     | "dialogue"
     | "narrativeIntent"
@@ -119,6 +120,7 @@ export type StoryboardRow = {
     musicMood?: string;
     camera: string;
     motion: string;
+    timeRange?: string;
     timeBeats: string;
     imageGenerationPrompt: string;
     videoMotionPrompt: string;

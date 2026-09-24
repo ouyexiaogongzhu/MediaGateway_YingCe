@@ -51,7 +51,7 @@ func (s *Service) processStoryboardRowsTask(ctx context.Context, task model.Task
 			"lightingAndAtmosphere": shot.Lighting, "audioEffects": shot.AudioEffects,
 			"imageGenerationPrompt": imagePrompt, "videoMotionPrompt": videoPrompt,
 			"imagePromptTemplateVariables": imagePromptVariables, "videoPromptTemplateVariables": videoPromptVariables,
-			"camera": shot.Camera, "motion": shot.Motion, "timeBeats": shot.TimeBeats, "negativePrompt": shot.Negative,
+			"camera": shot.Camera, "motion": shot.Motion, "timeBeats": shot.TimeBeats, "timeRange": shot.TimeRange, "negativePrompt": shot.Negative,
 			"narrativeIntent": shot.Intent, "viewerPOV": shot.ViewerPOV, "performanceBlocking": shot.Performance,
 			"mustHave": shot.MustHave, "optionalDetails": shot.Optional, "continuityOut": shot.ContinuityOut,
 			"assetBindings": shot.AssetRefs,

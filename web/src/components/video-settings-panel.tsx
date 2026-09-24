@@ -1,5 +1,5 @@
 import { type ReactNode } from "react";
-import { Switch } from "antd";
+import { InputNumber, Switch } from "antd";
 
 import { ImageSettingsTheme } from "@/components/image-settings-panel";
 import { boolConfig, isSeedanceFastModel, isSeedanceVideoConfig, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution, seedanceRatioOptions } from "@/lib/seedance-video";
@@ -78,6 +78,7 @@ export function VideoSettingsPanel({ config, onConfigChange, theme, showTitle = 
                             </button>
                         ))}
                     </div>
+                    {profile.allowCustomSize ? <CustomVideoSizeInput value={config.size} theme={theme} onChange={(value) => onConfigChange("size", value)} /> : null}
                 </SettingGroup> : null}
                 <SettingGroup title="秒数" color={theme.node.muted}>
 					<VideoDurationControl profile={profile} value={Number(seconds)} theme={theme} disabled={(value) => !hasPriceTierForVideoSelection(priceTiers, resolution, value)} onChange={(value) => onConfigChange("videoSeconds", String(value))} />
@@ -359,6 +360,24 @@ function SwitchRow({ label, checked, theme, onChange }: { label: string; checked
             <span className="shrink-0" onMouseDown={(event) => event.stopPropagation()}>
                 <Switch size="small" checked={checked} onChange={onChange} />
             </span>
+        </div>
+    );
+}
+
+function CustomVideoSizeInput({ value, theme, onChange }: { value: string; theme: CanvasTheme; onChange: (value: string) => void }) {
+    const match = /^(\d{1,4})x(\d{1,4})$/.exec((value || "").trim());
+    const width = match ? Number(match[1]) : undefined;
+    const height = match ? Number(match[2]) : undefined;
+    const update = (next: number | undefined, which: "w" | "h") => {
+        const finalW = which === "w" ? next : width;
+        const finalH = which === "h" ? next : height;
+        if (finalW && finalH) onChange(`${finalW}x${finalH}`);
+    };
+    return (
+        <div className="mt-1.5 grid grid-cols-[1fr_auto_1fr] items-center gap-1.5" onMouseDown={(event) => event.stopPropagation()}>
+            <InputNumber size="small" min={32} max={4096} step={32} value={width} placeholder="宽" onChange={(v) => update(v ?? undefined, "w")} />
+            <span className="text-xs opacity-45">×</span>
+            <InputNumber size="small" min={32} max={4096} step={32} value={height} placeholder="高" onChange={(v) => update(v ?? undefined, "h")} />
         </div>
     );
 }

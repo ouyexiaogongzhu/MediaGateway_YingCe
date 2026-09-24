@@ -66,6 +66,7 @@ export type VideoCapabilityConfig = {
     };
     durationSupported?: boolean;
     ratios: string[];
+    allowCustomSize?: boolean;
     defaultRatio: string;
     resolutions: string[];
     defaultResolution: string;
@@ -924,7 +925,11 @@ export function normalizeVideoValue(profile: VideoCapabilityConfig, value: { sec
 }
 
 export function resolveVideoRatioValue(profile: VideoCapabilityConfig, value: string | undefined) {
-    return profile.ratios.includes(value || "") ? value! : profile.defaultRatio || profile.ratios[0] || "";
+    const raw = (value || "").trim();
+    if (profile.ratios.includes(raw)) return raw;
+    // 自定义像素画幅（模型声明 allowCustomSize）原样保留，不被默认值吞掉。
+    if (/^\d{2,4}x\d{2,4}$/.test(raw)) return raw;
+    return profile.defaultRatio || profile.ratios[0] || "";
 }
 
 export function resolveVideoResolutionValue(profile: VideoCapabilityConfig, value: string | undefined) {

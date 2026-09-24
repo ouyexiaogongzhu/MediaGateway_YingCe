@@ -20,8 +20,8 @@ type fakeRowVideoGateway struct {
 	videoErr  error
 
 	mixVideoJobIDs []string
-	mixKeepAudio   []bool
 	mixTracks      [][]rowVideoMixTrack
+	mixKeepAudio   []bool
 	mixErr         error
 
 	waitCalls  []string
@@ -83,28 +83,29 @@ func TestRunStoryboardRowVideo(t *testing.T) {
 		verify  func(t *testing.T, fake *fakeRowVideoGateway, out rowVideoOutcome)
 	}{
 		{
-			name: "对白行：h3 原生说话（台词进 prompt），mix 混 sfx 并保留源音轨",
+			name: "对白行：tts 驱动口型（参考音轨），台词进 prompt，mix 混 sfx 并保留源音轨",
 			row: storyboardRowVideoRow{
 				Dialogue: "你终于来了。", DurationSeconds: 3, VoiceMode: "dialogue",
 				VideoMotionPrompt: "推镜", SfxTags: []string{"ambience_wind", "door_open"},
 				Characters: []storyboardRowCharacterRef{{CharacterName: "张三", CharacterVersionID: "v1"}},
 			},
 			verify: func(t *testing.T, fake *fakeRowVideoGateway, out rowVideoOutcome) {
-				if len(fake.speechVoiceIDs) != 0 {
-					t.Fatalf("TTS 已暂停，不应调用")
+				if len(fake.speechVoiceIDs) != 1 || fake.speechVoiceIDs[0] != "voice-001" {
+					t.Fatalf("TTS 应按绑定音色调用一次，实际 %v", fake.speechVoiceIDs)
 				}
 				if len(fake.videoReqs) != 1 {
 					t.Fatalf("应提交一次视频任务")
 				}
 				video := fake.videoReqs[0]
-				if len(video.ReferenceAudios) != 0 {
-					t.Fatalf("Ref2VA 路线不应带参考音轨，实际 %v", video.ReferenceAudios)
+				if len(video.ReferenceAudios) != 1 || !strings.HasPrefix(video.ReferenceAudios[0], "data:audio/wav;base64,") {
+					t.Fatalf("对白行视频应带一条 wav data URL 参考音轨，实际 %v", video.ReferenceAudios)
 				}
 				if !strings.Contains(video.Prompt, "你终于来了。") {
 					t.Fatalf("台词应进视频 prompt，实际 %q", video.Prompt)
 				}
+				// tts 2.4s → ceil 3；durationSeconds 3 → seconds 3
 				if video.Seconds != 3 {
-					t.Fatalf("seconds 应为行时长 3，实际 %d", video.Seconds)
+					t.Fatalf("seconds 应为 max(3, ceil(2.4))=3，实际 %d", video.Seconds)
 				}
 				if video.Size != "" {
 					t.Fatalf("未传宽高时不应带 size，实际 %q", video.Size)
@@ -130,7 +131,7 @@ func TestRunStoryboardRowVideo(t *testing.T) {
 			},
 		},
 		{
-			name: "旁白行：h3 原生说旁白，mix 只混 sfx 并保留源音轨",
+			name: "旁白行：tts 不进视频，mix 叠 sfx 与旁白两轨并保留源音轨",
 			row: storyboardRowVideoRow{
 				Dialogue: "夜色渐深。", DurationSeconds: 4, VoiceMode: "voiceover",
 				VideoMotionPrompt: "拉镜", SfxTags: []string{"ambience_night"},
@@ -139,11 +140,12 @@ func TestRunStoryboardRowVideo(t *testing.T) {
 				if len(fake.videoReqs) != 1 || len(fake.videoReqs[0].ReferenceAudios) != 0 {
 					t.Fatalf("旁白行视频不应带参考音轨")
 				}
-				if !strings.Contains(fake.videoReqs[0].Prompt, "夜色渐深。") {
-					t.Fatalf("旁白台词应进视频 prompt")
+				if len(fake.mixTracks[0]) != 2 {
+					t.Fatalf("旁白行 mix 应为 sfx+旁白两轨，实际 %v", fake.mixTracks[0])
 				}
-				if len(fake.mixTracks[0]) != 1 {
-					t.Fatalf("旁白行 mix 应只有一条 sfx 轨，实际 %v", fake.mixTracks[0])
+				last := fake.mixTracks[0][1]
+				if last.SfxTag != "" || last.Path == "" || !strings.HasSuffix(last.Path, ".wav") {
+					t.Fatalf("第二轨应为旁白 wav 路径，实际 %+v", last)
 				}
 				if !fake.mixKeepAudio[0] {
 					t.Fatalf("旁白行应保留源音轨")
@@ -151,7 +153,7 @@ func TestRunStoryboardRowVideo(t *testing.T) {
 			},
 		},
 		{
-			name: "无台词行：mix 只混 sfx 且丢弃源音轨",
+			name: "无台词行：跳过 tts，mix 只混 sfx",
 			row: storyboardRowVideoRow{
 				DurationSeconds: 5, VoiceMode: "dialogue",
 				VideoMotionPrompt: "横移", SfxTags: []string{"thunder"},
@@ -202,6 +204,30 @@ func TestRunStoryboardRowVideo(t *testing.T) {
 			},
 		},
 		{
+			name: "tts 时长超行时长：seconds 向上取整扩到配音长度",
+			row: storyboardRowVideoRow{
+				Dialogue: "很长的一句台词。", DurationSeconds: 3, VoiceMode: "voiceover",
+				VideoMotionPrompt: "推镜",
+			},
+			fake: fakeRowVideoGateway{speechDuration: 7.2},
+			verify: func(t *testing.T, fake *fakeRowVideoGateway, out rowVideoOutcome) {
+				if out.Seconds != 8 {
+					t.Fatalf("seconds 应为 ceil(7.2)=8，实际 %d", out.Seconds)
+				}
+			},
+		},
+		{
+			name:    "tts 失败：错误传播且不提交视频/混音",
+			row:     storyboardRowVideoRow{Dialogue: "台词", DurationSeconds: 3, VideoMotionPrompt: "推镜"},
+			fake:    fakeRowVideoGateway{speechErr: errors.New("voice engine down")},
+			wantErr: "TTS 生成失败：voice engine down",
+			verify: func(t *testing.T, fake *fakeRowVideoGateway, out rowVideoOutcome) {
+				if len(fake.videoReqs) != 0 || len(fake.mixTracks) != 0 {
+					t.Fatalf("tts 失败后不应继续提交视频/混音")
+				}
+			},
+		},
+		{
 			name:    "视频轮询失败：错误带 job id 且不提交混音",
 			row:     storyboardRowVideoRow{Dialogue: "台词", DurationSeconds: 3, VideoMotionPrompt: "推镜"},
 			fake:    fakeRowVideoGateway{waitErrors: map[string]error{"video-job-1": errors.New("gateway job video-job-1 failed: gpu oom")}},
@@ -217,8 +243,8 @@ func TestRunStoryboardRowVideo(t *testing.T) {
 			row:     storyboardRowVideoRow{Dialogue: "台词", DurationSeconds: 3},
 			wantErr: "分镜行缺少 videoMotionPrompt，无法生成视频",
 			verify: func(t *testing.T, fake *fakeRowVideoGateway, out rowVideoOutcome) {
-				if len(fake.videoReqs) != 0 {
-					t.Fatalf("校验失败后不应提交视频")
+				if len(fake.speechVoiceIDs) != 0 {
+					t.Fatalf("校验应先于 TTS")
 				}
 			},
 		},

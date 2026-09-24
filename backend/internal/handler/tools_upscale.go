@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"strconv"
@@ -40,6 +41,7 @@ func toolsUpscaleUpload(svc *service.Service) gin.HandlerFunc {
 
 		// 两个分支只构造 request，响应处理共用。
 		var request *http.Request
+		log.Printf("[tools-upscale] resource_id=%q video_field=%v", c.PostForm("resource_id"), c.Request.MultipartForm != nil)
 		if resourceID := c.PostForm("resource_id"); resourceID != "" {
 			// 素材库资源：gateway 同机落库，直接传绝对路径，免 2GB 重传。
 			path, err := svc.ResourceLocalFilePath(user.ID, resourceID)

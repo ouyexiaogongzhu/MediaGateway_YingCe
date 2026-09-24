@@ -55,6 +55,7 @@ function resolveStoryboardVisibleColumns(columns?: StoryboardColumn[]) {
 const columnOptions: Array<{ label: string; value: StoryboardColumn }> = [
     { label: "序号", value: "shotNumber" },
     { label: "时长", value: "durationSeconds" },
+    { label: "时间区间", value: "timeRange" },
     { label: "画面描述", value: "plotDescription" },
     { label: "台词/旁白", value: "dialogue" },
     { label: "镜头意图", value: "narrativeIntent" },
@@ -430,15 +431,19 @@ export function CanvasScriptNodeContent({
                             自动拆分 · 时长自动
                         </span>
                     ) : (
-                        <Select<StoryboardShotCount>
-                            className="min-w-24"
-                            size="small"
-                            value={shotCount}
-                            disabled={node.metadata?.status === "loading"}
-                            options={[{ value: "auto", label: "自动拆分" }, ...Array.from({ length: 10 }, (_, index) => ({ value: String(index + 1) as StoryboardShotCount, label: `${index + 1} 镜` }))]}
-                            popupMatchSelectWidth={false}
-                            onChange={onShotCountChange}
-                        />
+                        <Tooltip title="镜头数：留空=自动（按时间轴切分）；填 1–100 则严格按该数量切分">
+                            <InputNumber<number>
+                                className="min-w-24"
+                                size="small"
+                                min={1}
+                                max={100}
+                                step={1}
+                                value={shotCount === "auto" ? undefined : Number(shotCount)}
+                                placeholder="自动拆分"
+                                disabled={node.metadata?.status === "loading"}
+                                onChange={(value) => onShotCountChange(value == null ? "auto" : String(value) as StoryboardShotCount)}
+                            />
+                        </Tooltip>
                     )}
                     {simpleMode ? null : (
                         <Select<StoryboardShotDuration>
@@ -899,6 +904,7 @@ function editorRow(shotNumber: number): StoryboardRow {
         camera: "",
         motion: "",
         timeBeats: "",
+        timeRange: "",
         imageGenerationPrompt: "",
         videoMotionPrompt: "",
         mustHave: [],

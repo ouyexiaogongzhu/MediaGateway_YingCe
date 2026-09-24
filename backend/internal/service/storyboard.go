@@ -9,7 +9,7 @@ import (
 	"unicode/utf8"
 )
 
-const maxStoryboardShots = 12
+const maxStoryboardShots = 100
 
 type agentStoryboardInput struct {
 	References     []string                  `json:"references"`
@@ -82,6 +82,7 @@ type agentStoryboardShot struct {
 	VideoMotionPrompt string             `json:"videoMotionPrompt,omitempty"`
 	Camera          string               `json:"camera"`
 	Motion          string               `json:"motion"`
+	TimeRange       string               `json:"timeRange,omitempty"`
 	TimeBeats       string               `json:"timeBeats"`
 	Negative        string               `json:"negativePrompt"`
 	AssetRefs       []storyboardAssetRef `json:"assetRefs"`
@@ -314,8 +315,8 @@ func validateStoryboardShotCount(plan agentStoryboardPlan, target int) error {
 	if target == 0 {
 		return nil
 	}
-	if target < 1 || target > 10 {
-		return fmt.Errorf("分镜数量必须在 1 到 10 之间")
+	if target < 1 || target > maxStoryboardShots {
+		return fmt.Errorf("分镜数量必须在 1 到 %d 之间", maxStoryboardShots)
 	}
 	if len(plan.Shots) != target {
 		return fmt.Errorf("分镜数量必须是 %d，实际生成 %d", target, len(plan.Shots))

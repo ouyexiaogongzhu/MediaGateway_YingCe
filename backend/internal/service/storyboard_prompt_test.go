@@ -31,8 +31,8 @@ func TestStoryboardCinematicQualityContractIncludesCameraLanguageGuide(t *testin
 			t.Fatalf("camera language guide is missing %q: %s", term, contract)
 		}
 	}
-	if !strings.Contains(contract, "1 到 12 个镜头") || !strings.Contains(contract, "所需的最少镜头数") {
-		t.Fatalf("automatic shot count contract is not bounded: %s", contract)
+	if !strings.Contains(contract, "按时间轴连续切分") || !strings.Contains(contract, "timeRange") || !strings.Contains(contract, "最多 100 个") {
+		t.Fatalf("automatic shot count contract is not time-axis bounded: %s", contract)
 	}
 }
 
@@ -43,8 +43,11 @@ func TestStoryboardOutputTokenLimitTracksRequestedShotCount(t *testing.T) {
 	if got := storyboardOutputTokenLimit(10); got != 10000 {
 		t.Fatalf("ten-shot token limit = %d, want 10000", got)
 	}
-	if got := storyboardOutputTokenLimit(0); got != 12000 {
-		t.Fatalf("automatic token limit = %d, want 12000", got)
+	if got := storyboardOutputTokenLimit(0); got != 32000 {
+		t.Fatalf("automatic token limit = %d, want 32000", got)
+	}
+	if got := storyboardOutputTokenLimit(100); got != 32000 {
+		t.Fatalf("hundred-shot token limit = %d, want 32000 (capped)", got)
 	}
 }
 
