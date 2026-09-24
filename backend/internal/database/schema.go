@@ -16,11 +16,23 @@ import (
 // Models 是应用持久化表的唯一清单，服务启动和跨数据库迁移必须共用它。
 func Models() []any {
 	return []any{
+		&model.CloudAgentExecution{},
+		&model.CloudAgentEventRecord{},
+		&model.CloudAgentMessageRecord{},
+		&model.CloudAgentCanvasMutation{},
+		&model.CloudAgentResourceLease{},
+		&model.AgentProfile{},
+		&model.AgentLesson{},
+		&model.AgentMemorySetting{},
 		&model.User{},
 		&model.AuthSession{},
 		&model.UserIdentity{},
 		&model.OAuthState{},
 		&model.EmailVerificationCode{},
+		&model.AuthVerification{},
+		&model.NotificationQuota{},
+		&model.SMSChannel{},
+		&model.SMSRecord{},
 		&model.ModelChannel{},
 		&model.ChannelModel{},
 		&model.ChannelModelPriceTier{},
@@ -55,6 +67,8 @@ func Models() []any {
 		&model.SkillVersion{},
 		&model.SkillFile{},
 		&model.UserSkillState{},
+		&model.Tool{},
+		&model.ToolFavorite{},
 		&model.Resource{},
 		&model.ResourceDeletionJob{},
 		&model.AnnouncementImageDraft{},
@@ -81,20 +95,20 @@ func Models() []any {
 		&model.WorkflowStepTask{},
 		&model.ProductionTaskLink{},
 		&model.CanvasProject{},
+		&model.CanvasSnapshot{},
+		&model.CanvasSnapshotResource{},
 		&model.CanvasShare{},
 		&model.PromptTemplate{},
 		&model.UserPromptCustomization{},
 		&model.Announcement{},
 		&model.UserAnnouncementRead{},
+		&model.BannerAnnouncement{},
 		&model.Task{},
+		&model.CreationRun{},
+		&model.CreationSubmission{},
 		&model.TaskTextDelta{},
-		&model.Session{},
-		&model.Message{},
 		&model.TaskLog{},
-		&model.SessionFile{},
 		&model.Result{},
-		&model.ComfyBridge{},
-		&model.ComfyBridgeRequest{},
 	}
 }
 
@@ -149,7 +163,27 @@ func migrateSchemaV1(db *gorm.DB) error {
 	if err := db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_logical_model_source_active ON logical_models(source_channel_model_id) WHERE source_channel_model_id <> '' AND archived_at IS NULL").Error; err != nil {
 		return err
 	}
+	if err := db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_phone_nonempty ON users(phone) WHERE phone <> ''").Error; err != nil {
+		return err
+	}
 	return db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_nonempty ON users(lower(email)) WHERE email <> ''").Error
+}
+
+// migrateSchemaV35 installs the authentication notification tables and fields
+// added after the v34 deployment line. They cannot be added to the baseline
+// model registry alone because existing databases never rerun migration v1.
+func migrateSchemaV35(db *gorm.DB) error {
+	if err := db.AutoMigrate(
+		&model.User{},
+		&model.EmailVerificationCode{},
+		&model.AuthVerification{},
+		&model.NotificationQuota{},
+		&model.SMSChannel{},
+		&model.SMSRecord{},
+	); err != nil {
+		return err
+	}
+	return db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_phone_nonempty ON users(phone) WHERE phone <> ''").Error
 }
 
 func backfillProjectUnitWordCounts(db *gorm.DB) error {

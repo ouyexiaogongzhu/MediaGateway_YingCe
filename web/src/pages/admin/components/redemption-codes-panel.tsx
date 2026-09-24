@@ -1,14 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { App, Button, Drawer, Form, Input, InputNumber, Modal, Popconfirm, Select, Space } from "antd";
+import { App, Button, Drawer, Form, Input, InputNumber, Modal, Popconfirm, Space } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { Ban, Copy, Eye, KeyRound, RefreshCw, Search, TicketCheck } from "lucide-react";
 
-import { PaginationBar } from "@/components/layout/workspace-page";
+import { PaginationBar } from "@/pages/admin/components/admin-ui";
 import { formatCredits } from "@/constant/credits";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { ApiError } from "@/services/api/request";
 import { createAdminRedeemBatch, disableAdminRedeemBatch, disableAdminRedeemCode, listAdminRedeemBatchCodes, listAdminRedeemBatches, type AdminRedeemCode, type RedeemBatch } from "@/services/api/wallet";
 import { AdminDataTable, AdminExportButton, AdminRowActions, AdminStatusBadge, AdminTableEmpty, type AdminStatusTone } from "./admin-ui";
+import { Select } from "@/components/ui/base/select";
 
 type RedeemFormValues = { amount?: number | null; count?: number | null; note?: string; expiresAt?: string };
 type PendingRedeemBatch = {
@@ -79,7 +80,7 @@ export default function RedemptionCodesPanel({ createOpen, onCreateOpenChange, o
                 keyword: queryKeyword || undefined,
                 validity: queryValidity === "all" ? undefined : queryValidity,
                 page: targetPage,
-                limit: targetPageSize,
+                pageSize: targetPageSize,
             });
             if (requestId !== listRequestRef.current) return false;
             const lastPage = Math.max(1, Math.ceil(result.total / targetPageSize));
@@ -641,7 +642,7 @@ function RedeemBatchCodesModal({ batch, onClose, onBatchChanged }: { batch: Rede
         setCodes([]);
         setTotal(0);
         try {
-            const result = await listAdminRedeemBatchCodes(batch.id, { status: targetStatus === "all" ? undefined : targetStatus, page: targetPage, limit: targetPageSize });
+            const result = await listAdminRedeemBatchCodes(batch.id, { status: targetStatus === "all" ? undefined : targetStatus, page: targetPage, pageSize: targetPageSize });
             if (requestId !== requestRef.current) return false;
             const lastPage = Math.max(1, Math.ceil(result.total / targetPageSize));
             if (targetPage > lastPage) {

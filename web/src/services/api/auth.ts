@@ -3,16 +3,15 @@ import type { BillingOrder, CreditLedgerEntry } from "@/services/api/wallet";
 import type { GenerationTask, TaskStatus } from "@/services/api/task-center";
 import type { CanvasDrawingEngineSetting } from "@/lib/canvas/canvas-drawing-engine";
 import type { FeatureAvailability } from "@/stores/use-user-store";
-import { apiClient, request } from "@/services/api/request";
-import type { PublicLogicalModel } from "@/services/api/logical-models";
+import { http, apiBaseURL } from "@/services/api/request";
 import type { OSSConnectionTestInput, OSSConnectionTestResult, OSSProvider, S3Preset } from "@/lib/oss-settings";
+import type { VerificationPolicy } from "./verification";
 
-const api = apiClient;
 
 let authSessionRequest: Promise<AuthSessionPayload> | null = null;
 let authSessionCache: { payload: AuthSessionPayload; expiresAt: number } | null = null;
 
-function invalidateAuthSessionCache() {
+export function invalidateAuthSessionCache() {
     authSessionCache = null;
 }
 
@@ -20,6 +19,9 @@ export type LocalUser = {
     id: string;
     username: string;
     email?: string;
+    phone?: string;
+    emailVerifiedAt?: string;
+    phoneVerifiedAt?: string;
     displayName: string;
     avatarUrl?: string;
     identityProvider?: string;
@@ -39,7 +41,6 @@ export type AdminUser = LocalUser & {
 
 export type AuthSessionPayload = {
     user: LocalUser | null;
-    logicalModels?: PublicLogicalModel[];
     runtimeLimits?: RuntimeLimits;
     drawingEngine?: CanvasDrawingEngineSetting;
     features?: FeatureAvailability;
@@ -48,7 +49,6 @@ export type AuthSessionPayload = {
 export type RuntimeLimits = {
     activeTaskLimit: number;
     resourceUploadMB: number;
-    sessionUploadMB: number;
     recycleBinRetentionDays?: number;
 };
 
@@ -61,6 +61,7 @@ export type ApiCallLog = {
     channelName: string;
     taskId?: string;
     taskStatus?: TaskStatus;
+    mediaStage?: GenerationTask["mediaStage"];
     billingOrderId?: string;
     billingStatus?: BillingOrder["status"];
     billingAmountMicrocredits: number;
@@ -68,7 +69,7 @@ export type ApiCallLog = {
     source: string;
     capability: "text" | "image" | "video" | "audio" | "";
     operation?: string;
-    requestKind: "create" | "poll" | "download" | "repair" | "";
+    requestKind: "create" | "poll" | "download" | "upload" | "local_save" | "register" | "repair" | "";
     billable: boolean;
     apiFormat: string;
     method: string;
@@ -89,6 +90,8 @@ export type ApiCallLog = {
     videoSeconds: number;
     providerRequestId?: string;
     estimatedCostMicros: number;
+    creditCostConfigured?: boolean;
+    creditCostMicrocredits?: number;
     costAvailable: boolean;
     currency?: string;
     errorCode?: string;
@@ -129,8 +132,6 @@ export type AdminUserDetail = {
         assetBytes: number;
         canvasCount: number;
         canvasBytes: number;
-        sessionCount: number;
-        sessionBytes: number;
         taskCount: number;
         taskBytes: number;
         apiCallCount: number;
@@ -162,7 +163,16 @@ export type AnalyticsFilters = {
 
 export type AdminReferenceData = {
     users: Array<{ id: string; username: string; displayName: string }>;
-    channels: Array<{ id: string; name: string; enabled: boolean; models: string[] }>;
+    channels: Array<{ id: string; name: string; enabled: boolean; models: string[]; modelDisplayNames?: string[] }>;
+};
+
+export type AnalyticsFinance = {
+    settledOrders: number;
+    costedOrders: number;
+    revenueMicrocredits: number;
+    costMicrocredits: number;
+    profitMicrocredits: number | null;
+    profitMargin: number | null;
 };
 
 export type AdminAnalytics = {
@@ -178,9 +188,7 @@ export type AdminAnalytics = {
         successRate: number;
         p95DurationMs: number;
         currentQueuedTasks: number;
-        estimatedCostMicros: number;
-        costAvailable: boolean;
-        currency?: string;
+        finance?: AnalyticsFinance | null;
     };
     trend: Array<{ day: string; tasks: number; requests: number; activeUsers: number; requestSuccessRate: number }>;
     models: Array<{
@@ -199,9 +207,7 @@ export type AdminAnalytics = {
         usageAvailable: boolean;
         mediaCount: number;
         videoSeconds: number;
-        estimatedCostMicros: number;
-        costAvailable: boolean;
-        currency?: string;
+        finance?: AnalyticsFinance | null;
     }>;
     users: Array<{ userId: string; name: string; activeDays: number; tasks: number; agentMessages: number; canvasDays: number; assets: number; resources: number; commonModel?: string }>;
     failures: Array<{ type: string; model: string; count: number; lastError?: string; lastSeenAt: string }>;
@@ -275,6 +281,9 @@ export type AdminOSSSetting = {
     region: string;
     endpoint: string;
     cdnBaseUrl: string;
+    cdnAuthMode: "" | "public" | "qiniu" | string;
+    requireCDN: boolean;
+    allowPrivateProxy: boolean;
     bucket: string;
     accessKeyId: string;
     accessKeySecret?: string;
@@ -308,7 +317,6 @@ export type AdminArkPrivateAssetSetting = {
 
 export type RuntimeResourcePolicy = {
     resourceUploadMB: number;
-    sessionUploadMB: number;
     generatedFileMB: number;
     dailyUploadMB: number;
     storedFileGB: number;
@@ -316,7 +324,6 @@ export type RuntimeResourcePolicy = {
     taskDataGB: number;
     assetCount: number;
     canvasCount: number;
-    sessionCount: number;
     taskCount: number;
     apiCallLogCount: number;
     recycleBinRetentionDays?: number;
@@ -332,14 +339,16 @@ export type RuntimeTaskPolicy = {
     videoTimeoutMinutes: number;
     storyboardTimeoutMinutes: number;
     defaultTimeoutMinutes: number;
+    /** 画布 Agent 单步模型调用的输出上限（思考 + 正文 + 工具参数）；0 表示不限制。 */
+    agentStepMaxOutputTokens: number;
+    /** 画布 Agent 单步模型调用的秒级墙钟；0 表示沿用文本任务超时。 */
+    agentStepTimeoutSeconds: number;
 };
 
 export type RuntimeRequestPolicy = {
     taskCreatePerMinute: number;
-    sessionCreatePerMinute: number;
     resourceUploadPerMinute: number;
     resourceImportPerMinute: number;
-    sessionFilePerMinute: number;
     assetWritePerMinute: number;
     canvasWritePerMinute: number;
     registerPerHour: number;
@@ -369,19 +378,20 @@ export type RuntimePolicySetting = {
 };
 
 export function getAuthSettings() {
-    return request<{ firstUser: boolean; registrationEnabled: boolean; linuxdoEnabled: boolean; emailEnabled: boolean; emailCodeRequired: boolean }>(api.get("/auth/settings"));
+    return http.get<VerificationPolicy & { firstUser: boolean; registrationEnabled: boolean; linuxdoEnabled: boolean; emailEnabled: boolean; emailCodeRequired: boolean; smsBindingAvailable: boolean; emailBindingAvailable: boolean; agreementTitle?: string; agreementContent?: string }>("/auth/settings");
 }
 
-export function linuxDOLoginURL(next: string) {
-    const base = String(api.defaults.baseURL || "/api").replace(/\/$/, "");
-    return `${base}/auth/linuxdo/start?next=${encodeURIComponent(next)}`;
+export function linuxDOLoginURL(next: string, acceptedTerms?: boolean) {
+    const base = String(apiBaseURL).replace(/\/$/, "");
+    const termsQuery = acceptedTerms === undefined ? "" : `&acceptedTerms=${acceptedTerms ? "true" : "false"}`;
+    return `${base}/auth/linuxdo/start?next=${encodeURIComponent(next)}${termsQuery}`;
 }
 
 export function getAuthSession() {
     const now = Date.now();
     if (authSessionCache && authSessionCache.expiresAt > now) return Promise.resolve(authSessionCache.payload);
     if (authSessionRequest) return authSessionRequest;
-    authSessionRequest = request<AuthSessionPayload>(api.get("/auth/session"))
+    authSessionRequest = http.get<AuthSessionPayload>("/auth/session")
         .then((payload) => {
             authSessionCache = { payload, expiresAt: Date.now() + 5_000 };
             return payload;
@@ -393,218 +403,226 @@ export function getAuthSession() {
 }
 
 export function getSystemChannels() {
-    return request<{ channels: ModelChannel[] }>(api.get("/channels/system"));
+    return http.get<{ channels: ModelChannel[] }>("/channels/system");
 }
 
 export function getFeatureAvailability() {
-    return request<{ features: FeatureAvailability }>(api.get("/features"));
+    return http.get<{ features: FeatureAvailability }>("/features");
 }
 
 export function getAdminFeatureAvailability() {
-    return request<{ features: FeatureAvailability }>(api.get("/admin/settings/features"));
+    return http.get<{ features: FeatureAvailability }>("/admin/settings/features");
 }
 
-export function updateAdminFeatureAvailability(features: Pick<FeatureAvailability, "shortDramaEnabled" | "taskCenterEnabled" | "creditsEnabled" | "customChannelsEnabled" | "frontendModelsEnabled" | "pluginCenterEnabled" | "systemPluginsVisibleToUsers">) {
-    return request<{ features: FeatureAvailability }>(api.patch("/admin/settings/features", features));
+export function updateAdminFeatureAvailability(features: Partial<Pick<FeatureAvailability, "welcomeEnabled" | "shortDramaEnabled" | "taskCenterEnabled" | "creditsEnabled" | "customChannelsEnabled" | "frontendModelsEnabled" | "pluginCenterEnabled" | "systemPluginsVisibleToUsers">>) {
+    return http.patch<{ features: FeatureAvailability }>("/admin/settings/features", features);
 }
 
 export async function login(input: { username: string; password: string }) {
-    const result = await request<{ user: LocalUser }>(api.post("/auth/login", input));
+    const result = await http.post<{ user: LocalUser }>("/auth/login", input);
     // 登录会改变服务端会话身份，不能让登录前缓存的游客 session 污染后续恢复。
     invalidateAuthSessionCache();
     return result;
 }
 
 export function sendRegistrationEmailCode(email: string) {
-    return request<{ sent: boolean }>(api.post("/auth/email-code", { email }));
+    return http.post<{ sent: boolean }>("/auth/email-code", { email });
 }
 
 export function sendPasswordResetEmailCode(email: string) {
-    return request<{ sent: boolean }>(api.post("/auth/password-reset-code", { email }));
+    return http.post<{ sent: boolean }>("/auth/password-reset-code", { email });
 }
 
 export function resetPassword(input: { email: string; emailCode: string; password: string }) {
-    return request<{ reset: boolean }>(api.post("/auth/password-reset", input));
+    return http.post<{ reset: boolean }>("/auth/password-reset", input);
 }
 
-export function register(input: { username: string; email?: string; emailCode?: string; displayName?: string; password: string }) {
-    return request<{ user: LocalUser }>(api.post("/auth/register", input));
-}
-
-export async function logout() {
-    const result = await request<{ ok: boolean }>(api.post("/auth/logout"));
+export async function register(input: { username: string; email?: string; emailCode?: string; phone?: string; smsCode?: string; ticket?: string; displayName?: string; password: string; acceptedTerms: boolean }) {
+    const result = await http.post<{ user: LocalUser }>("/auth/register", input);
     invalidateAuthSessionCache();
     return result;
 }
 
-export type AdminListParams = { keyword?: string; status?: string; role?: string; page?: number; limit?: number };
+export async function logout() {
+    const result = await http.post<{ ok: boolean }>("/auth/logout");
+    invalidateAuthSessionCache();
+    return result;
+}
+
+export type AdminListParams = { keyword?: string; status?: string; role?: string; page?: number; pageSize?: number };
 
 export function listAdminUsers(params: AdminListParams = {}) {
-    return request<{ users: AdminUser[]; total: number; page: number; limit: number }>(api.get("/admin/users", { params }));
+    return http.get<{ users: AdminUser[]; total: number; page: number; pageSize: number }>("/admin/users", { params });
 }
 
 export function createAdminUser(input: { username: string; displayName: string; email?: string; password: string; role: LocalUser["role"]; status: LocalUser["status"] }) {
-    return request<{ user: AdminUser }>(api.post("/admin/users", input));
+    return http.post<{ user: AdminUser }>("/admin/users", input);
 }
 
 export function getAdminReferences() {
-    return request<AdminReferenceData>(api.get("/admin/references"));
+    return http.get<AdminReferenceData>("/admin/references");
 }
 
 export function getAdminUserDetail(id: string) {
-    return request<AdminUserDetail>(api.get(`/admin/users/${encodeURIComponent(id)}/detail`));
+    return http.get<AdminUserDetail>(`/admin/users/${encodeURIComponent(id)}/detail`);
 }
 
-export function listAdminUserLedger(id: string, params: { page?: number; limit?: number; type?: string } = {}) {
-    return request<{ entries: CreditLedgerEntry[]; total: number; page: number; limit: number }>(api.get(`/admin/users/${encodeURIComponent(id)}/ledger`, { params }));
+export function listAdminUserLedger(id: string, params: { page?: number; pageSize?: number; type?: string } = {}) {
+    return http.get<{ entries: CreditLedgerEntry[]; total: number; page: number; pageSize: number }>(`/admin/users/${encodeURIComponent(id)}/ledger`, { params });
 }
 
-export function listAdminUserTasks(id: string, params: { page?: number; limit?: number } = {}) {
-    return request<{ tasks: AdminUserTask[]; total: number; page: number; limit: number }>(api.get(`/admin/users/${encodeURIComponent(id)}/tasks`, { params }));
+export function listAdminUserTasks(id: string, params: { page?: number; pageSize?: number } = {}) {
+    return http.get<{ tasks: AdminUserTask[]; total: number; page: number; pageSize: number }>(`/admin/users/${encodeURIComponent(id)}/tasks`, { params });
 }
 
-export function listAdminUserAuditEvents(id: string, params: { page?: number; limit?: number } = {}) {
-    return request<{ events: AdminAuditEvent[]; total: number; page: number; limit: number }>(api.get(`/admin/users/${encodeURIComponent(id)}/audit-events`, { params }));
+export function listAdminUserAuditEvents(id: string, params: { page?: number; pageSize?: number } = {}) {
+    return http.get<{ events: AdminAuditEvent[]; total: number; page: number; pageSize: number }>(`/admin/users/${encodeURIComponent(id)}/audit-events`, { params });
 }
 
 export function updateAdminUser(id: string, input: Partial<Pick<LocalUser, "displayName" | "email" | "role" | "status">> & { password?: string }) {
-    return request<{ user: LocalUser }>(api.patch(`/admin/users/${encodeURIComponent(id)}`, input));
+    return http.patch<{ user: LocalUser }>(`/admin/users/${encodeURIComponent(id)}`, input);
 }
 
 export function deleteAdminUser(id: string) {
-    return request<{ ok: boolean }>(api.delete(`/admin/users/${encodeURIComponent(id)}`));
+    return http.delete<{ ok: boolean }>(`/admin/users/${encodeURIComponent(id)}`);
 }
 
 export function bulkDisableAdminUsers(userIds: string[]) {
-    return request<{ users: LocalUser[]; disabledCount: number }>(api.post("/admin/users/bulk-disable", { userIds }));
+    return http.post<{ users: LocalUser[]; disabledCount: number }>("/admin/users/bulk-disable", { userIds });
 }
 
 export function listAdminChannels(params: AdminListParams = {}) {
-    return request<{ channels: ModelChannel[]; total: number; page: number; limit: number }>(api.get("/admin/channels", { params }));
+    return http.get<{ channels: ModelChannel[]; total: number; page: number; pageSize: number }>("/admin/channels", { params });
 }
 
 export function createAdminChannel(input: Partial<ModelChannel> & { useGlobalConcurrency?: boolean }) {
-    return request<{ channel: ModelChannel }>(api.post("/admin/channels", input));
+    return http.post<{ channel: ModelChannel }>("/admin/channels", input);
+}
+
+export function duplicateAdminChannel(id: string) {
+    return http.post<{ channel: ModelChannel }>(`/admin/channels/${encodeURIComponent(id)}/duplicate`);
 }
 
 export function updateAdminChannel(id: string, input: Partial<ModelChannel> & { useGlobalConcurrency?: boolean }) {
-    return request<{ channel: ModelChannel }>(api.patch(`/admin/channels/${encodeURIComponent(id)}`, input));
+    return http.patch<{ channel: ModelChannel }>(`/admin/channels/${encodeURIComponent(id)}`, input);
 }
 
 export function deleteAdminChannel(id: string) {
-    return request<{ ok: boolean }>(api.delete(`/admin/channels/${encodeURIComponent(id)}`));
+    return http.delete<{ ok: boolean }>(`/admin/channels/${encodeURIComponent(id)}`);
 }
 
 export function listAdminPromptTemplates() {
-    return request<{ templates: PromptTemplate[]; definitions: PromptOperationDefinition[] }>(api.get("/admin/prompt-templates"));
+    return http.get<{ templates: PromptTemplate[]; definitions: PromptOperationDefinition[] }>("/admin/prompt-templates");
 }
 
 export function createAdminPromptTemplate(input: Pick<PromptTemplate, "operation" | "name" | "content"> & { enabled?: boolean }) {
-    return request<{ template: PromptTemplate }>(api.post("/admin/prompt-templates", input));
+    return http.post<{ template: PromptTemplate }>("/admin/prompt-templates", input);
 }
 
 export function updateAdminPromptTemplate(id: string, input: Pick<PromptTemplate, "operation" | "name" | "content"> & { enabled?: boolean }) {
-    return request<{ template: PromptTemplate }>(api.patch(`/admin/prompt-templates/${encodeURIComponent(id)}`, input));
+    return http.patch<{ template: PromptTemplate }>(`/admin/prompt-templates/${encodeURIComponent(id)}`, input);
 }
 
 export function deleteAdminPromptTemplate(id: string) {
-    return request<{ ok: boolean }>(api.delete(`/admin/prompt-templates/${encodeURIComponent(id)}`));
+    return http.delete<{ ok: boolean }>(`/admin/prompt-templates/${encodeURIComponent(id)}`);
 }
 
 export function listUserPromptPreferences() {
-    return request<{ preferences: UserPromptPreference[] }>(api.get("/settings/prompt-templates"));
+    return http.get<{ preferences: UserPromptPreference[] }>("/settings/prompt-templates");
 }
 
 export function updateUserPromptCustomization(operation: string, input: Pick<UserPromptCustomization, "mode" | "content">) {
-    return request<{ customization: UserPromptCustomization }>(api.patch(`/settings/prompt-templates/${encodeURIComponent(operation)}`, input));
+    return http.patch<{ customization: UserPromptCustomization }>(`/settings/prompt-templates/${encodeURIComponent(operation)}`, input);
 }
 
 export function resetUserPromptCustomization(operation: string) {
-    return request<{ ok: boolean }>(api.delete(`/settings/prompt-templates/${encodeURIComponent(operation)}`));
+    return http.delete<{ ok: boolean }>(`/settings/prompt-templates/${encodeURIComponent(operation)}`);
 }
 
 export function getAdminOSSSetting() {
-    return request<{ setting: AdminOSSSetting }>(api.get("/admin/settings/oss"));
+    return http.get<{ setting: AdminOSSSetting }>("/admin/settings/oss");
 }
 
 export function updateAdminOSSSetting(input: Partial<AdminOSSSetting>) {
-    return request<{ setting: AdminOSSSetting }>(api.patch("/admin/settings/oss", input));
+    return http.patch<{ setting: AdminOSSSetting }>("/admin/settings/oss", input);
 }
 
 export function testAdminOSSConnection(input: OSSConnectionTestInput) {
-    return request<OSSConnectionTestResult>(api.post("/admin/settings/oss/test", input));
+    return http.post<OSSConnectionTestResult>("/admin/settings/oss/test", input);
 }
 
 export function getAdminArkPrivateAssetSetting() {
-    return request<{ setting: AdminArkPrivateAssetSetting }>(api.get("/admin/settings/ark-private-assets"));
+    return http.get<{ setting: AdminArkPrivateAssetSetting }>("/admin/settings/ark-private-assets");
 }
 
 export function updateAdminArkPrivateAssetSetting(input: Partial<AdminArkPrivateAssetSetting>) {
-    return request<{ setting: AdminArkPrivateAssetSetting }>(api.patch("/admin/settings/ark-private-assets", input));
+    return http.patch<{ setting: AdminArkPrivateAssetSetting }>("/admin/settings/ark-private-assets", input);
 }
 
 export function getAdminRuntimePolicySetting() {
-    return request<{ setting: RuntimePolicySetting }>(api.get("/admin/settings/runtime-policy"));
+    return http.get<{ setting: RuntimePolicySetting }>("/admin/settings/runtime-policy");
 }
 
 export function getAdminSelfUseRuntimePolicy() {
-    return request<{ setting: RuntimePolicySetting }>(api.get("/admin/settings/runtime-policy/self-use"));
+    return http.get<{ setting: RuntimePolicySetting }>("/admin/settings/runtime-policy/self-use");
 }
 
 export function updateAdminRuntimePolicySetting(input: Pick<RuntimePolicySetting, "resource" | "task" | "request">) {
-    return request<{ setting: RuntimePolicySetting }>(api.put("/admin/settings/runtime-policy", input));
+    return http.put<{ setting: RuntimePolicySetting }>("/admin/settings/runtime-policy", input);
 }
 
 export function resetAdminRuntimePolicySetting() {
-    return request<{ setting: RuntimePolicySetting }>(api.delete("/admin/settings/runtime-policy"));
+    return http.delete<{ setting: RuntimePolicySetting }>("/admin/settings/runtime-policy");
 }
 
 export function getAdminDrawingEngineSetting() {
-    return request<{ setting: CanvasDrawingEngineSetting }>(api.get("/admin/settings/drawing-engine"));
+    return http.get<{ setting: CanvasDrawingEngineSetting }>("/admin/settings/drawing-engine");
 }
 
 export function updateAdminDrawingEngineSetting(input: Pick<CanvasDrawingEngineSetting, "defaultEngine" | "tldrawLicenseKey">) {
-    return request<{ setting: CanvasDrawingEngineSetting }>(api.patch("/admin/settings/drawing-engine", input));
+    return http.patch<{ setting: CanvasDrawingEngineSetting }>("/admin/settings/drawing-engine", input);
 }
 
-export function listAdminApiLogs(params: AdminListParams = {}) {
-    return request<{ logs: ApiCallLog[]; total: number; page: number; limit: number }>(api.get("/admin/api-logs", { params }));
+export type AdminApiLogParams = AdminListParams & { recordType?: "request" | "download" | "all" };
+
+export function listAdminApiLogs(params: AdminApiLogParams = {}) {
+    return http.get<{ logs: ApiCallLog[]; total: number; page: number; pageSize: number }>("/admin/api-logs", { params });
 }
 
 export function getAdminApiLog(id: string) {
-    return request<{ log: ApiCallLog }>(api.get(`/admin/api-logs/${encodeURIComponent(id)}`));
+    return http.get<{ log: ApiCallLog }>(`/admin/api-logs/${encodeURIComponent(id)}`);
 }
 
 export function queryAdminApiLogTask(id: string) {
-    return request<AdminProviderTaskQueryResult>(api.post(`/admin/api-logs/${encodeURIComponent(id)}/query-task`));
+    return http.post<AdminProviderTaskQueryResult>(`/admin/api-logs/${encodeURIComponent(id)}/query-task`);
 }
 
-export async function exportAdminApiLogs(params: AdminListParams & { ids?: string[] } = {}) {
-    const response = await api.get<Blob>("/admin/api-logs-export.csv", { params: { ...params, ids: params.ids?.join(",") }, responseType: "blob" });
+export async function exportAdminApiLogs(params: AdminApiLogParams & { ids?: string[] } = {}) {
+    const response = await http.raw<Blob>({ method: "get", url: "/admin/api-logs-export.csv", params: { ...params, ids: params.ids?.join(",") }, responseType: "blob" });
     return response.data;
 }
 
 export function getAdminAnalytics(params: AnalyticsFilters) {
-    return request<AdminAnalytics>(api.get("/admin/analytics/overview", { params }));
+    return http.get<AdminAnalytics>("/admin/analytics/overview", { params });
 }
 
 export async function exportAdminAnalytics(params: AnalyticsFilters) {
-    const response = await api.get<Blob>("/admin/analytics/export.csv", { params, responseType: "blob" });
+    const response = await http.raw<Blob>({ method: "get", url: "/admin/analytics/export.csv", params, responseType: "blob" });
     return response.data;
 }
 
 export function listAdminModelPricings() {
-    return request<{ pricings: ModelPricing[] }>(api.get("/admin/model-pricings"));
+    return http.get<{ pricings: ModelPricing[] }>("/admin/model-pricings");
 }
 
 export function createAdminModelPricing(input: Omit<ModelPricing, "id" | "createdAt" | "updatedAt">) {
-    return request<{ pricing: ModelPricing }>(api.post("/admin/model-pricings", input));
+    return http.post<{ pricing: ModelPricing }>("/admin/model-pricings", input);
 }
 
 export function updateAdminModelPricing(id: string, input: Omit<ModelPricing, "id" | "createdAt" | "updatedAt">) {
-    return request<{ pricing: ModelPricing }>(api.patch(`/admin/model-pricings/${encodeURIComponent(id)}`, input));
+    return http.patch<{ pricing: ModelPricing }>(`/admin/model-pricings/${encodeURIComponent(id)}`, input);
 }
 
 export function deleteAdminModelPricing(id: string) {
-    return request<{ ok: boolean }>(api.delete(`/admin/model-pricings/${encodeURIComponent(id)}`));
+    return http.delete<{ ok: boolean }>(`/admin/model-pricings/${encodeURIComponent(id)}`);
 }

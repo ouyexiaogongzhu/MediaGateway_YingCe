@@ -5,7 +5,7 @@ import { describe, expect, test } from "bun:test";
 
 import { canvasNodeRenderPadding, resolveActiveCanvasMediaNodeId } from "../src/lib/canvas/canvas-performance-mode";
 import { videoMetadata } from "../src/lib/canvas/canvas-generation-task-sync";
-import { canvasNodeVideoPreviewUrl, canvasVideoAssetPreviewUrl } from "../src/lib/canvas/canvas-media-preview";
+import { canvasNodeVideoPreviewReference, canvasNodeVideoPreviewUrl, canvasVideoAssetPreviewUrl } from "../src/lib/canvas/canvas-media-preview";
 import { collectImageStorageKeys } from "../src/services/image-storage";
 import { CanvasNodeType, type CanvasNodeData } from "../src/types/canvas";
 import { detectVideoAudioTrack, detectVideoAudioTrackFromBlob, detectVideoAudioTrackFromUrl } from "../src/lib/video-poster";
@@ -15,6 +15,11 @@ const canvasAudioPlayerSource = readFileSync(resolve(import.meta.dir, "../src/co
 const canvasMentionSource = readFileSync(resolve(import.meta.dir, "../src/components/canvas/canvas-resource-mention-textarea.tsx"), "utf8");
 const canvasNodeSource = readFileSync(resolve(import.meta.dir, "../src/components/canvas/canvas-node.tsx"), "utf8");
 const canvasVideoPreviewSource = readFileSync(resolve(import.meta.dir, "../src/services/canvas-video-preview.ts"), "utf8");
+const browserDownloadSource = readFileSync(resolve(import.meta.dir, "../src/services/browser-download.ts"), "utf8");
+const canvasNodeEditorSource = readFileSync(resolve(import.meta.dir, "../src/pages/canvas/use-canvas-node-editor.ts"), "utf8");
+const assetLibrarySource = readFileSync(resolve(import.meta.dir, "../src/pages/assets/index.tsx"), "utf8");
+const projectAssetsSource = readFileSync(resolve(import.meta.dir, "../src/pages/projects/detail/assets.tsx"), "utf8");
+const workflowProductionSource = readFileSync(resolve(import.meta.dir, "../src/pages/projects/detail/workflow-production-workbench.tsx"), "utf8");
 const videoPlayerSource = readFileSync(resolve(import.meta.dir, "../src/components/video-player.tsx"), "utf8");
 const canvasProjectSource = readFileSync(resolve(import.meta.dir, "../src/pages/canvas/project.tsx"), "utf8");
 const globalStylesSource = readFileSync(resolve(import.meta.dir, "../src/styles/globals.css"), "utf8");
@@ -69,18 +74,41 @@ describe("large canvas media rendering", () => {
         expect(globalStylesSource).not.toMatch(/\[data-canvas-viewport-interacting="true"\]\s+\.canvas-node-shell\s*\{[^}]*content-visibility:\s*hidden/);
     });
 
-    test("lets inactive video nodes hydrate their own first-frame preview", () => {
-        expect(canvasNodeContentSource).toContain("if (previewUrl || !node.metadata?.content || !updateMetadataRef.current)");
+    test("keeps inactive video nodes on a viewport-gated static first frame", () => {
+        const inactivePreviewSource = canvasNodeContentSource.match(/function InactiveVideoPreview[\s\S]*?\n}\n\nfunction VideoPreviewPlayButton/)?.[0] || "";
+        expect(canvasNodeContentSource).toContain("if (hasPersistedPreview || !nearViewport || (!node.metadata?.content && !node.metadata?.storageKey) || !updateMetadataRef.current)");
         expect(canvasNodeContentSource).not.toContain("hydrateMediaPreview");
-        expect(canvasNodeContentSource).toContain("mediaActive || !hasPassivePreview");
-        expect(canvasNodeContentSource).toContain('muted\n                playsInline\n                preload="auto"');
-        expect(canvasNodeContentSource).toContain("onLoadedMetadata={(event) => primePassiveVideoFrame(event.currentTarget)}");
-        expect(canvasNodeContentSource).toContain("video.currentTime = Math.min(0.001, video.duration)");
+        expect(inactivePreviewSource).toContain("hasPersistedPreview || localPreviewUrl || !nearViewport");
+        expect(inactivePreviewSource).toContain("<video");
+        expect(inactivePreviewSource).toContain("muted");
+        expect(inactivePreviewSource).toContain('preload="auto"');
+        expect(inactivePreviewSource).toContain("video.currentTime = Math.min(0.001, video.duration / 2)");
+        expect(inactivePreviewSource).toContain("onCanPlay={() => setPassiveVideoReady(true)}");
+        expect(inactivePreviewSource).not.toContain("autoPlay");
+        expect(inactivePreviewSource).toContain("<VideoPreviewPlayButton");
+        expect(canvasNodeContentSource).toContain("useVideoPlaybackUrl(node, mediaActive)");
+        expect(canvasNodeContentSource).toContain("onMediaPlayRequest?.(node.id)");
+        expect(canvasNodeContentSource).toContain('autoPlay preload="metadata"');
+        expect(canvasNodeContentSource).toContain("scheduleResourceBlobCache(node.metadata?.storageKey || \"\")");
     });
 
-    test("allows failed or empty first-frame requests to retry", () => {
-        expect(canvasVideoPreviewSource).toContain("if (!preview) previewRequests.delete(requestKey)");
-        expect(canvasVideoPreviewSource).toContain("previewRequests.delete(requestKey);");
+    test("downloads OSS media by browser navigation without fetching it into a Blob", () => {
+        expect(browserDownloadSource).toContain('getResourceAccess(normalizedStorageKey, "download"');
+        expect(browserDownloadSource).toContain('document.createElement("a")');
+        expect(browserDownloadSource).not.toContain("fetch(");
+        expect(browserDownloadSource).not.toContain("response.blob()");
+        expect(browserDownloadSource).not.toContain("new Blob(");
+        expect(canvasNodeEditorSource).toContain("downloadBrowserMedia({ storageKey, url: content, fileName: downloadName })");
+        expect(assetLibrarySource).toContain("downloadBrowserMedia({ storageKey: asset.data.storageKey");
+        expect(projectAssetsSource).toContain("downloadBrowserMedia({ storageKey: personal.data.storageKey");
+        expect(workflowProductionSource).toContain("storageKey: resourceStorageKey(artifact.resourceId)");
+        expect(workflowProductionSource).not.toContain("await response.blob()");
+    });
+
+    test("shows a captured first frame before its OSS poster upload finishes and allows later retries", () => {
+        expect(canvasVideoPreviewSource).toContain("const localUrl = URL.createObjectURL(captured.poster)");
+        expect(canvasVideoPreviewSource).toContain("return { localUrl, persisted }");
+        expect(canvasVideoPreviewSource).not.toContain("previewRequests");
     });
 });
 
@@ -174,13 +202,14 @@ describe("video canvas controls", () => {
         expect(videoPlayerSource).toContain("VolumeLow: defaultLayoutIcons.MuteButton.Mute");
         expect(videoPlayerSource).toContain("VolumeHigh: defaultLayoutIcons.MuteButton.Mute");
         expect(videoPlayerSource).toContain("muteButton.disabled = noAudio;");
-        expect(videoPlayerSource).toContain("(volumeSlider as HTMLElement & { disabled?: boolean }).disabled = noAudio;");
+        expect(videoPlayerSource).not.toContain("volumeSlider as HTMLElement & { disabled?: boolean }");
+        expect(videoPlayerSource).toContain('volumeSlider.setAttribute("aria-disabled", String(noAudio))');
         expect(videoPlayerSource).toContain('event.target.closest(".vds-volume,.vds-mute-button,.vds-volume-slider")');
         expect(videoPlayerSource).toContain("onKeyDown={stopCanvasControlInteraction}");
         expect(videoPlayerSource).not.toContain("onPointerDownCapture={stopCanvasControlInteraction}");
         expect(videoPlayerSource).not.toContain("onMouseDownCapture={stopCanvasControlInteraction}");
         expect(videoPlayerSource).not.toContain("onClickCapture={stopCanvasControlClick}");
-        expect(canvasNodeContentSource).toContain("hasAudio={inferVideoHasAudio(node.metadata)} autoPlay={mediaActive}");
+        expect(canvasNodeContentSource).toContain('hasAudio={inferVideoHasAudio(node.metadata)} autoPlay preload="metadata"');
         expect(canvasNodeContentSource).toContain('if (["false", "0", "off", "no", "disabled"].includes(value || "")) return false;');
     });
 
@@ -225,6 +254,8 @@ describe("video canvas controls", () => {
     });
 
     test("keeps the first activation click from being treated as a node drag", () => {
+        expect(canvasNodeContentSource).toContain("onPointerDown={(event) => event.stopPropagation()}");
+        expect(canvasNodeContentSource).toContain("onMouseDown={(event) => event.stopPropagation()}");
         expect(videoPlayerSource).toContain("onClick={stopCanvasControlClick}");
         expect(videoPlayerSource).toContain('event.target.closest(".vds-controls,.vds-menu-items")');
         expect(videoPlayerSource).toContain("event.nativeEvent?.composedPath?.()");
@@ -236,7 +267,7 @@ describe("video canvas controls", () => {
 
     test("allows a runtime-positive probe to correct stale silent metadata", () => {
         expect(videoPlayerSource).toContain("hasAudio === true || detectedHasAudio === true ? true");
-        expect(videoPlayerSource).toContain("hasAudio === false ? false : undefined");
+        expect(videoPlayerSource).toContain("detectedHasAudio === false ? false");
         expect(videoPlayerSource).toContain("detectedHasAudio === false ? false");
         expect(videoPlayerSource).toContain("detectVideoAudioTrackFromUrl(src)");
     });
@@ -303,6 +334,26 @@ describe("passive video previews", () => {
         expect(metadata.hasAudio).toBe(false);
         expect(collectImageStorageKeys(metadata)).toContain("image:user:1");
         expect(canvasNodeVideoPreviewUrl(video)).toBe("blob:poster");
+        expect(canvasNodeVideoPreviewReference(video)).toEqual({ src: "blob:poster", storageKey: "image:user:1" });
+    });
+
+    test("keeps the poster storage key so passive previews resolve a fresh OSS URL", () => {
+        const video = node("video", CanvasNodeType.Video);
+        video.metadata = {
+            content: "/api/resources/video-1/file",
+            storageKey: "resource:video-1",
+            videoPreview: {
+                content: "/api/resources/poster-1/file",
+                storageKey: "resource:poster-1",
+                width: 400,
+                height: 225,
+            },
+        };
+
+        expect(canvasNodeVideoPreviewReference(video)).toEqual({
+            src: "/api/resources/poster-1/file",
+            storageKey: "resource:poster-1",
+        });
     });
 
     test("uses explicit posters without ever returning the original video URL", () => {

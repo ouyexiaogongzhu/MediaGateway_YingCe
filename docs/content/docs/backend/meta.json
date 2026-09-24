@@ -4,8 +4,13 @@
   "defaultOpen": true,
   "pages": [
     "local-development",
+    "canvas-agent-appearance",
+    "http-api",
     "code-map",
     "backend-database",
+    "video-token-billing",
+    "task-runtime-stability",
+    "newapi-channel-2",
     "system-update",
     "protocol-plugins",
     "canvas-data-structure"

@@ -1,14 +1,15 @@
-import { useCallback, useState, type Dispatch, type SetStateAction } from "react";
+import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { App } from "antd";
-import { saveAs } from "file-saver";
 
 import { NODE_DEFAULT_SIZE } from "@/constant/canvas";
 import { FOLDER_COLLAPSED_HEIGHT, FOLDER_COLLAPSED_WIDTH, FRAME_COLLAPSED_HEIGHT, FRAME_COLLAPSED_WIDTH, getFrameChildIds, isCanvasFolderNode, isFrameNode } from "@/lib/canvas/canvas-frame";
 import { buildCanvasMediaDownloadFileName } from "@/lib/canvas/canvas-media-download";
+import { writeCanvasNodePrompt } from "@/lib/canvas/canvas-node-prompt";
 import { applyBatchPrimaryImage, applyNodeConfigPatch } from "@/lib/canvas/canvas-project-domain";
 import { resetGenerationTaskMetadata } from "@/lib/canvas/canvas-project-generation";
 import { CONTENT_MODERATION_ERROR_CODE, isContentModerationError } from "@/lib/generation-error";
+import { downloadBrowserMedia } from "@/services/browser-download";
 import { ensureCanvasNodeAsset } from "@/services/project-asset-sync";
 import { CanvasNodeType, type CanvasFolderStyle, type CanvasFolderTheme, type CanvasNodeData, type CanvasNodeMetadata, type Position } from "@/types/canvas";
 
@@ -41,6 +42,10 @@ export function useCanvasNodeEditor({
     const queryClient = useQueryClient();
     const [collapsingBatchIds, setCollapsingBatchIds] = useState<Set<string>>(new Set());
     const [openingBatchIds, setOpeningBatchIds] = useState<Set<string>>(new Set());
+    const batchMotionTimers = useRef(new Map<string, number>());
+    useEffect(() => () => {
+        batchMotionTimers.current.forEach((timer) => window.clearTimeout(timer));
+    }, []);
 
     const handleNodeResize = useCallback((nodeId: string, width: number, height: number, position?: Position) => {
         setNodes((current) => {
@@ -120,16 +125,26 @@ export function useCanvasNodeEditor({
     }, [setNodes]);
 
     const toggleBatchExpanded = useCallback((nodeId: string) => {
-        const isExpanded = Boolean(nodesRef.current.find((node) => node.id === nodeId)?.metadata?.imageBatchExpanded);
+        const root = nodesRef.current.find((node) => node.id === nodeId);
+        if (!root?.metadata?.isBatchRoot) return;
+        const isExpanded = Boolean(root.metadata.imageBatchExpanded);
+        window.clearTimeout(batchMotionTimers.current.get(nodeId));
         const updateMotionState = isExpanded ? setCollapsingBatchIds : setOpeningBatchIds;
+        const clearMotionState = isExpanded ? setOpeningBatchIds : setCollapsingBatchIds;
+        clearMotionState((current) => {
+            const next = new Set(current);
+            next.delete(nodeId);
+            return next;
+        });
         updateMotionState((current) => new Set(current).add(nodeId));
-        window.setTimeout(() => {
+        batchMotionTimers.current.set(nodeId, window.setTimeout(() => {
+            batchMotionTimers.current.delete(nodeId);
             updateMotionState((current) => {
                 const next = new Set(current);
                 next.delete(nodeId);
                 return next;
             });
-        }, isExpanded ? 320 : 260);
+        }, isExpanded ? 320 : 445 + (root.metadata.batchChildIds?.length || 1) * 24));
         setNodes((current) => current.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, imageBatchExpanded: !node.metadata?.imageBatchExpanded } } : node)));
     }, [nodesRef, setNodes]);
 
@@ -148,16 +163,16 @@ export function useCanvasNodeEditor({
     const handleNodePromptChange = useCallback((nodeId: string, prompt: string) => {
         setNodes((current) => current.map((node) => {
             if (node.id !== nodeId) return node;
-            const hasExistingContent = (node.type === CanvasNodeType.Text && Boolean(node.metadata?.content?.trim())) || (node.type === CanvasNodeType.Image && Boolean(node.metadata?.content));
             const previousPrompt = node.metadata?.composerContent ?? node.metadata?.prompt ?? "";
+            const promptChanged = prompt !== previousPrompt;
             const moderationFailure = node.metadata?.generationErrorCode === CONTENT_MODERATION_ERROR_CODE || isContentModerationError(node.metadata?.errorDetails);
-            const metadata = moderationFailure && prompt !== previousPrompt
+            const metadata = moderationFailure && promptChanged
                 ? resetGenerationTaskMetadata(node.metadata, node.metadata?.content ? "success" : "idle")
                 : node.metadata;
-            const promptTemplateMetadata = prompt !== previousPrompt && metadata?.promptTemplateOperation
-                ? { promptTemplateOperation: undefined, promptTemplateVariables: undefined }
-                : {};
-            return { ...node, metadata: hasExistingContent ? { ...metadata, ...promptTemplateMetadata, composerContent: prompt } : { ...metadata, ...promptTemplateMetadata, prompt, composerContent: prompt } };
+            return writeCanvasNodePrompt(node, prompt, {
+                metadata,
+                clearPromptTemplate: promptChanged && Boolean(metadata?.promptTemplateOperation),
+            });
         }));
     }, [setNodes]);
 
@@ -181,10 +196,18 @@ export function useCanvasNodeEditor({
             .catch((error) => message.error(error instanceof Error ? error.message : "资产分类更新失败"));
     }, [canvasId, domainProjectId, message, nodesRef, queryClient, setNodes]);
 
-    const downloadNodeImage = useCallback((node: CanvasNodeData) => {
-        if ((node.type !== CanvasNodeType.Image && node.type !== CanvasNodeType.Video && node.type !== CanvasNodeType.Audio) || !node.metadata?.content) return;
-        saveAs(node.metadata.content, buildCanvasMediaDownloadFileName(canvasTitle, node));
-    }, [canvasTitle]);
+    const downloadNodeImage = useCallback(async (node: CanvasNodeData) => {
+        const supported = node.type === CanvasNodeType.Image || node.type === CanvasNodeType.Video || node.type === CanvasNodeType.Audio;
+        const content = node.metadata?.content?.trim();
+        const storageKey = node.metadata?.storageKey?.trim();
+        if (!supported || (!content && !storageKey)) return;
+        try {
+            const downloadName = buildCanvasMediaDownloadFileName(canvasTitle, node);
+            await downloadBrowserMedia({ storageKey, url: content, fileName: downloadName });
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "下载失败");
+        }
+    }, [canvasTitle, message]);
 
     const saveNodeAsset = useCallback(async (node: CanvasNodeData) => {
         if (node.type !== CanvasNodeType.Text && node.type !== CanvasNodeType.Image && node.type !== CanvasNodeType.Video && node.type !== CanvasNodeType.Audio) return message.error("当前节点类型不能保存为素材");

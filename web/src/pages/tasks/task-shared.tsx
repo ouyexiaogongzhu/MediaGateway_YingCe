@@ -2,6 +2,7 @@ import { Coins } from "lucide-react";
 
 import { formatCredits } from "@/constant/credits";
 import { CONTENT_MODERATION_ERROR_CODE, generationErrorMessage, isContentModerationError } from "@/lib/generation-error";
+import { mediaDeliverySummary } from "@/lib/generation-task-display";
 import type { GenerationTask, TaskStatus } from "@/services/api/task-center";
 import { modelDisplayName, type AiConfig } from "@/stores/use-config-store";
 
@@ -19,6 +20,7 @@ export function isTaskFailed(task: GenerationTask) {
 
 export function taskAttentionReason(task: GenerationTask) {
     if (task.status === "cancelled") return providerCancelStatusLabel(task);
+    if (task.mediaStage) return mediaDeliverySummary(task.status, task.mediaStage);
     if (task.errorCode === CONTENT_MODERATION_ERROR_CODE || isContentModerationError(task.error)) return "内容审核未通过，请修改输入后新建任务";
     if (task.error) return generationErrorMessage(task.error);
     return task.stage || "生成失败，打开详情查看原因";
@@ -82,7 +84,7 @@ export function formatModelName(config: AiConfig, task: GenerationTask) {
     const model = raw.includes("::") ? raw.split("::").pop()?.trim() || raw : raw;
 
     // 工作流名称是任务快照，不属于模型渠道，不能交给模型展示名解析器再次映射成“系统模型”。
-    if (task.provider === "runninghub" || task.provider === "comfyui-bridge") return raw || "工作流";
+    if (task.provider === "runninghub") return raw || "工作流";
     if (!model) return "工作流";
     if (model === "version-router") return "版本对比工作流";
     if (model === "workflow-router") return "工作流路由";

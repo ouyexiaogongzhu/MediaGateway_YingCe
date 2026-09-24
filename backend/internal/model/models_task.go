@@ -3,24 +3,33 @@ package model
 import "time"
 
 type Task struct {
-	ID                     string     `json:"id" gorm:"primaryKey;size:36"`
-	UserID                 string     `json:"userId" gorm:"index;size:36;index:idx_tasks_user_created,priority:1;index:idx_tasks_user_project_created,priority:1"`
-	TraceID                string     `json:"-" gorm:"index;size:96"`
-	RequestID              string     `json:"-" gorm:"index;size:96"`
-	SessionID              string     `json:"sessionId" gorm:"index;size:36"`
-	ProjectID              string     `json:"projectId" gorm:"index;size:80;index:idx_tasks_user_project_created,priority:2"`
-	Type                   string     `json:"type" gorm:"index;size:64"`
-	Status                 TaskStatus `json:"status" gorm:"index;size:24;index:idx_tasks_status_created,priority:1;index:idx_tasks_claim,priority:1;index:idx_tasks_provider_cancel,priority:1"`
-	Stage                  string     `json:"stage" gorm:"size:80"`
-	Progress               int        `json:"progress"`
-	Prompt                 string     `json:"prompt"`
-	Operation              string     `json:"operation" gorm:"size:64"`
-	Provider               string     `json:"provider" gorm:"size:64"`
-	Model                  string     `json:"model" gorm:"size:120"`
-	LogicalModelID         string     `json:"logicalModelId,omitempty" gorm:"size:36;index"`
-	LogicalModelRevisionID string     `json:"logicalModelRevisionId,omitempty" gorm:"size:36;index"`
-	RouteID                string     `json:"routeId,omitempty" gorm:"size:36;index"`
-	ChannelModelID         string     `json:"channelModelId,omitempty" gorm:"size:36;index"`
+	AgentRunID                   string                   `json:"agentRunId,omitempty" gorm:"size:36;index"`
+	GenerationID                 string                   `json:"generationId,omitempty" gorm:"size:36;index"`
+	ApprovalID                   string                   `json:"approvalId,omitempty" gorm:"size:160"`
+	AuthorizedChargeMicrocredits int64                    `json:"authorizedChargeMicrocredits,omitempty"`
+	ExecutionDiagnosticJSON      string                   `json:"-" gorm:"type:text"`
+	Diagnostic                   *TaskExecutionDiagnostic `json:"diagnostic,omitempty" gorm:"-"`
+	CancellationSource           string                   `json:"cancellationSource,omitempty" gorm:"size:40"`
+	CancellationActorID          string                   `json:"cancellationActorId,omitempty" gorm:"size:36"`
+	CancellationRequestedAt      *time.Time               `json:"cancellationRequestedAt,omitempty"`
+	CreationSubmissionID         *string                  `json:"creationSubmissionId,omitempty" gorm:"size:36;uniqueIndex"`
+	ID                           string                   `json:"id" gorm:"primaryKey;size:36"`
+	UserID                       string                   `json:"userId" gorm:"index;size:36;index:idx_tasks_user_created,priority:1;index:idx_tasks_user_project_created,priority:1"`
+	TraceID                      string                   `json:"-" gorm:"index;size:96"`
+	RequestID                    string                   `json:"-" gorm:"index;size:96"`
+	ProjectID                    string                   `json:"projectId" gorm:"index;size:80;index:idx_tasks_user_project_created,priority:2"`
+	Type                         string                   `json:"type" gorm:"index;size:64"`
+	Status                       TaskStatus               `json:"status" gorm:"index;size:24;index:idx_tasks_status_created,priority:1;index:idx_tasks_claim,priority:1;index:idx_tasks_provider_cancel,priority:1"`
+	Stage                        string                   `json:"stage" gorm:"size:80"`
+	Progress                     int                      `json:"progress"`
+	Prompt                       string                   `json:"prompt"`
+	Operation                    string                   `json:"operation" gorm:"size:64"`
+	Provider                     string                   `json:"provider" gorm:"size:64"`
+	Model                        string                   `json:"model" gorm:"size:120"`
+	LogicalModelID               string                   `json:"logicalModelId,omitempty" gorm:"size:36;index"`
+	LogicalModelRevisionID       string                   `json:"logicalModelRevisionId,omitempty" gorm:"size:36;index"`
+	RouteID                      string                   `json:"routeId,omitempty" gorm:"size:36;index"`
+	ChannelModelID               string                   `json:"channelModelId,omitempty" gorm:"size:36;index"`
 	// RouteRun 只在用户主动重试时递增；worker 租约恢复不应创建新的路由选择世代。
 	RouteRun                  int                  `json:"-" gorm:"index"`
 	BillingOrderID            string               `json:"billingOrderId,omitempty" gorm:"index;size:36"`
@@ -37,13 +46,17 @@ type Task struct {
 	LeaseExpiresAt            *time.Time           `json:"-" gorm:"index;index:idx_tasks_claim,priority:2"`
 	InputJSON                 string               `json:"inputJson" gorm:"type:text"`
 	ResultJSON                string               `json:"resultJson" gorm:"type:text"`
-	TextDraft                 string               `json:"textDraft,omitempty" gorm:"type:text"`
-	Error                     string               `json:"error"`
-	Attempts                  int                  `json:"attempts"`
-	StartedAt                 *time.Time           `json:"startedAt"`
-	CompletedAt               *time.Time           `json:"completedAt"`
-	CreatedAt                 time.Time            `json:"createdAt" gorm:"index:idx_tasks_user_created,priority:2;index:idx_tasks_status_created,priority:2;index:idx_tasks_claim,priority:3;index:idx_tasks_user_project_created,priority:3"`
-	UpdatedAt                 time.Time            `json:"updatedAt"`
+	// MediaRecoveryJSON is an encrypted server-only checkpoint, never a public result.
+	MediaRecoveryJSON string     `json:"-" gorm:"type:text"`
+	MediaStage        string     `json:"mediaStage,omitempty" gorm:"size:24"`
+	CanRecoverMedia   bool       `json:"canRecoverMedia,omitempty" gorm:"-"`
+	TextDraft         string     `json:"textDraft,omitempty" gorm:"type:text"`
+	Error             string     `json:"error"`
+	Attempts          int        `json:"attempts"`
+	StartedAt         *time.Time `json:"startedAt"`
+	CompletedAt       *time.Time `json:"completedAt"`
+	CreatedAt         time.Time  `json:"createdAt" gorm:"index:idx_tasks_user_created,priority:2;index:idx_tasks_status_created,priority:2;index:idx_tasks_claim,priority:3;index:idx_tasks_user_project_created,priority:3"`
+	UpdatedAt         time.Time  `json:"updatedAt"`
 }
 
 // TaskTextDelta 只保存可回放窗口内的文本增量；最终正文和失败草稿分别归并到 Task.ResultJSON 与 Task.TextDraft。
@@ -58,28 +71,6 @@ type TaskTextDelta struct {
 	ExpiresAt time.Time `json:"expiresAt" gorm:"index"`
 }
 
-type Session struct {
-	ID                 string        `json:"id" gorm:"primaryKey;size:36"`
-	UserID             string        `json:"userId" gorm:"index;size:36"`
-	ProjectID          string        `json:"projectId" gorm:"index;size:80"`
-	Status             SessionStatus `json:"status" gorm:"index;size:24"`
-	Prompt             string        `json:"prompt"`
-	CanvasSnapshotJSON string        `json:"canvasSnapshotJson" gorm:"type:text"`
-	CanvasOpsJSON      string        `json:"canvasOpsJson" gorm:"type:text"`
-	CreatedAt          time.Time     `json:"createdAt"`
-	UpdatedAt          time.Time     `json:"updatedAt"`
-}
-
-type Message struct {
-	ID        string    `json:"id" gorm:"primaryKey;size:36"`
-	UserID    string    `json:"userId" gorm:"index;size:36"`
-	SessionID string    `json:"sessionId" gorm:"index;size:36"`
-	Role      string    `json:"role" gorm:"size:24"`
-	Content   string    `json:"content"`
-	Payload   string    `json:"payload" gorm:"type:text"`
-	CreatedAt time.Time `json:"createdAt"`
-}
-
 type TaskLog struct {
 	ID        string    `json:"id" gorm:"primaryKey;size:36"`
 	UserID    string    `json:"userId" gorm:"index;size:36"`
@@ -92,22 +83,10 @@ type TaskLog struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
-type SessionFile struct {
-	ID        string    `json:"id" gorm:"primaryKey;size:36"`
-	UserID    string    `json:"userId" gorm:"index;size:36"`
-	SessionID string    `json:"sessionId" gorm:"index;size:36"`
-	FileName  string    `json:"fileName"`
-	MimeType  string    `json:"mimeType"`
-	Path      string    `json:"-"`
-	Size      int64     `json:"size"`
-	CreatedAt time.Time `json:"createdAt"`
-}
-
 type Result struct {
 	ID        string    `json:"id" gorm:"primaryKey;size:36"`
 	UserID    string    `json:"userId" gorm:"index;size:36"`
 	TaskID    string    `json:"taskId" gorm:"index;size:36"`
-	SessionID string    `json:"sessionId" gorm:"index;size:36"`
 	Kind      string    `json:"kind" gorm:"size:64"`
 	URL       string    `json:"url"`
 	Payload   string    `json:"payload" gorm:"type:text"`

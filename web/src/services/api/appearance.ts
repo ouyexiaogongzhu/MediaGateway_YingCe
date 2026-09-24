@@ -1,7 +1,10 @@
-import { apiClient, request } from "@/services/api/request";
+import { http } from "@/services/api/request";
 import type { SkinDefinition } from "@/lib/skin-themes";
+import type { CanvasAppearance } from "@/lib/canvas/agent-appearance";
+import { apiBaseURL } from "@/services/api/request";
 
 export type PublicAppearance = {
+    canvas?: CanvasAppearance;
     schemaVersion: number;
     brandName: string;
     brandSlug: string;
@@ -12,6 +15,7 @@ export type PublicAppearance = {
     logoFrameEnabled: boolean;
     authVideoUrl: string;
     authVideoPosterUrl: string;
+    authVideoAutoplay: boolean;
     skinId: string;
     activeSkin: SkinDefinition;
     seoTitle: string;
@@ -30,6 +34,7 @@ export type PublicAppearance = {
 };
 
 export type AdminAppearance = {
+    canvas?: CanvasAppearance;
     schemaVersion: number;
     brandName: string;
     brandSlug: string;
@@ -40,6 +45,7 @@ export type AdminAppearance = {
     logoFrameEnabled: boolean;
     authVideoResourceId: string;
     authVideoPosterResourceId: string;
+    authVideoAutoplay: boolean;
     skinId: string;
     skinThemes: SkinDefinition[];
     seoTitle: string;
@@ -66,12 +72,12 @@ export type AppearanceResource = {
 };
 
 export async function getPublicAppearance(signal?: AbortSignal) {
-    const result = await request<{ appearance: PublicAppearance }>(apiClient.get("/public/appearance", { signal }));
+    const result = await http.get<{ appearance: PublicAppearance }>("/public/appearance", { signal });
     return result.appearance;
 }
 
 export async function getAdminAppearance(signal?: AbortSignal) {
-    const result = await request<{ setting: AdminAppearance }>(apiClient.get("/admin/settings/appearance", { signal }));
+    const result = await http.get<{ setting: AdminAppearance }>("/admin/settings/appearance", { signal });
     return result.setting;
 }
 
@@ -79,6 +85,7 @@ export async function updateAdminAppearance(
     input: Pick<
         AdminAppearance,
         | "brandName"
+        | "canvas"
         | "brandSlug"
         | "authHeroTitle"
         | "authHeroDescription"
@@ -87,6 +94,7 @@ export async function updateAdminAppearance(
         | "logoFrameEnabled"
         | "authVideoResourceId"
         | "authVideoPosterResourceId"
+        | "authVideoAutoplay"
         | "skinId"
         | "skinThemes"
         | "seoTitle"
@@ -97,18 +105,28 @@ export async function updateAdminAppearance(
         | "icpFilingNumber"
     >,
 ) {
-    const result = await request<{ setting: AdminAppearance }>(apiClient.patch("/admin/settings/appearance", input));
+    const result = await http.patch<{ setting: AdminAppearance }>("/admin/settings/appearance", input);
     return result.setting;
 }
 
 export async function resetAdminAppearance() {
-    const result = await request<{ setting: AdminAppearance }>(apiClient.delete("/admin/settings/appearance"));
+    const result = await http.delete<{ setting: AdminAppearance }>("/admin/settings/appearance");
     return result.setting;
 }
 
 export async function uploadAppearanceAsset(slot: AppearanceAssetSlot, file: File) {
     const body = new FormData();
     body.append("file", file);
-    const result = await request<{ resource: AppearanceResource }>(apiClient.post(`/admin/settings/appearance/assets/${slot}`, body));
+    const result = await http.post<{ resource: AppearanceResource }>(`/admin/settings/appearance/assets/${slot}`, body);
     return result.resource;
+}
+
+export async function uploadLive2D(file: File) {
+    const body = new FormData(); body.append("file", file);
+    const result = await http.post<{ model: { resourceId: string; entry: string } }>("/admin/settings/appearance/live2d", body);
+    return result.model;
+}
+
+export function live2DModelURL(resourceId: string, entry: string, preview = false) {
+    return `${apiBaseURL.replace(/\/$/, "")}/${preview ? "admin/settings" : "public"}/appearance/live2d/${encodeURIComponent(resourceId)}/${entry.split("/").map(encodeURIComponent).join("/")}`;
 }

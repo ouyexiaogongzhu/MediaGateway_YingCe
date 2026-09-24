@@ -6,6 +6,7 @@ import { nodeSizeFromRatio } from "@/lib/canvas/canvas-node-size";
 import { nextCanvasVersionLabel } from "@/lib/canvas/canvas-layout";
 import { buildAudioGenerationMetadata, buildVideoGenerationMetadata, generationReferenceUrls, runCanvasGenerationTaskToConsumer } from "@/lib/canvas/canvas-project-generation";
 import { canvasGenerationPromptMetadata } from "@/lib/canvas/canvas-generation-submission";
+import { producedModelCandidateForGeneration } from "@/lib/canvas/produced-model";
 import { CanvasNodeType, type CanvasNodeData } from "@/types/canvas";
 
 import type { CanvasGenerationExecution } from "./canvas-generation-executor-types";
@@ -59,6 +60,7 @@ export async function executeVideoGeneration({
             resourceReloadAvailable: undefined,
             failedPromptFingerprint: undefined,
             model: generationConfig.model,
+            producedModelCandidate: producedModelCandidateForGeneration(generationConfig),
             size: generationConfig.size,
             seconds: generationConfig.videoSeconds,
             vquality: generationConfig.vquality,
@@ -153,6 +155,7 @@ export async function executeAudioGeneration({
 }: CanvasGenerationExecution) {
     const spec = NODE_DEFAULT_SIZE[CanvasNodeType.Audio];
     const isEmptyAudioNode = sourceNode?.type === CanvasNodeType.Audio && !sourceNode.metadata?.content;
+    const isExistingAudioNode = sourceNode?.type === CanvasNodeType.Audio && Boolean(sourceNode.metadata?.content);
     const audioId = isEmptyAudioNode ? nodeId : nanoid();
     const parent = sourceNode?.position || { x: 0, y: 0 };
     const audioNode: CanvasNodeData = {
@@ -168,7 +171,7 @@ export async function executeAudioGeneration({
     setNodes((current) =>
         isEmptyAudioNode ? current.map((node) => (node.id === nodeId ? { ...node, ...audioNode } : node)) : [...current.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_SUCCESS } } : node)), audioNode],
     );
-    if (!isEmptyAudioNode) setConnections((current) => [...current, { id: nanoid(), fromNodeId: nodeId, toNodeId: audioId }]);
+    if (!isEmptyAudioNode && !isExistingAudioNode) setConnections((current) => [...current, { id: nanoid(), fromNodeId: nodeId, toNodeId: audioId }]);
 
     startGenerationRequest(audioId, nodeId, nodeId, controller);
     try {

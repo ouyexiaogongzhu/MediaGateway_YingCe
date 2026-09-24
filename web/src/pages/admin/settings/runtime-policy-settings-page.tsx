@@ -1,5 +1,5 @@
 import { App, Button, Form, InputNumber, Skeleton } from "antd";
-import { AlertTriangle, Database, Gauge, Infinity as InfinityIcon, Network, RefreshCw, RotateCcw, Save, ShieldCheck, TimerReset } from "lucide-react";
+import { AlertTriangle, Bot, Database, Gauge, Infinity as InfinityIcon, Network, RefreshCw, RotateCcw, Save, ShieldCheck, TimerReset } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useBlocker } from "react-router";
 
@@ -24,7 +24,6 @@ type PolicySectionDefinition = {
 
 const resourceFields: PolicyField[] = [
     { group: "resource", name: "resourceUploadMB", label: "普通资源单文件", extra: "素材上传和远程导入的单文件业务上限。", unit: "MB", max: 999 },
-    { group: "resource", name: "sessionUploadMB", label: "Agent 会话附件", extra: "单个会话附件的大小上限。", unit: "MB", max: 999 },
     { group: "resource", name: "generatedFileMB", label: "单个生成资源", extra: "上游生成响应和落库资源的单文件上限。", unit: "MB", max: 999 },
     { group: "resource", name: "dailyUploadMB", label: "每日上传总量", extra: "按 UTC 自然日累计资源与附件上传。", unit: "MB", max: 999_999 },
     { group: "resource", name: "storedFileGB", label: "账号文件总量", extra: "资源文件与 Agent 会话附件合计。", unit: "GB", max: 999 },
@@ -32,7 +31,6 @@ const resourceFields: PolicyField[] = [
     { group: "resource", name: "taskDataGB", label: "任务数据总量", extra: "任务历史、结果和上游请求日志合计。", unit: "GB", max: 999 },
     { group: "resource", name: "assetCount", label: "素材数量", extra: "单账号可保存的素材记录数。", unit: "条", max: 999_999_999 },
     { group: "resource", name: "canvasCount", label: "画布数量", extra: "单账号可保存的画布数量。", unit: "个", max: 999_999_999 },
-    { group: "resource", name: "sessionCount", label: "Agent 会话数量", extra: "单账号可保存的 Agent 会话数量。", unit: "个", max: 999_999_999 },
     { group: "resource", name: "taskCount", label: "任务历史数量", extra: "单账号保留的任务历史记录数。", unit: "条", max: 999_999_999 },
     { group: "resource", name: "apiCallLogCount", label: "请求日志数量", extra: "单账号保留的上游请求日志数。", unit: "条", max: 999_999_999 },
     { group: "resource", name: "recycleBinRetentionDays", label: "回收站自动清理时间", extra: "素材移入回收站后自动彻底删除的天数，0 表示不自动清理。", unit: "天", min: 0, max: 365 },
@@ -53,16 +51,35 @@ const timeoutFields: PolicyField[] = [
     { group: "task", name: "defaultTimeoutMinutes", label: "默认任务超时", extra: "未匹配专用类型时使用的最长执行时间。", unit: "分钟", max: 9_999 },
 ];
 
+const agentFields: PolicyField[] = [
+    {
+        group: "task",
+        name: "agentStepMaxOutputTokens",
+        label: "单步输出上限",
+        extra: "画布 Agent 每次模型调用的输出上限，含思考、正文与工具调用参数。0 表示不限制，此时只有单步超时兜底；抬高可以避免长思考模型被截断后返回空内容。",
+        unit: "token",
+        min: 0,
+        max: 131_072,
+    },
+    {
+        group: "task",
+        name: "agentStepTimeoutSeconds",
+        label: "单步超时",
+        extra: "画布 Agent 单步模型调用的最长等待时间，到点会中止这一步并自动关思考重试一次。0 表示沿用“文本任务超时”，不再单独计时。",
+        unit: "秒",
+        min: 0,
+        max: 3_600,
+    },
+];
+
 const rateFields: PolicyField[] = [
     { group: "request", name: "taskCreatePerMinute", label: "任务创建", extra: "每账号每分钟允许创建的任务数。", unit: "次/分钟", max: 999_999 },
-    { group: "request", name: "sessionCreatePerMinute", label: "会话创建", extra: "每账号每分钟允许创建的会话数。", unit: "次/分钟", max: 999_999 },
     { group: "request", name: "resourceUploadPerMinute", label: "资源上传", extra: "每账号每分钟上传资源的次数。", unit: "次/分钟", max: 999_999 },
     { group: "request", name: "resourceImportPerMinute", label: "资源导入", extra: "每账号每分钟导入远程资源的次数。", unit: "次/分钟", max: 999_999 },
-    { group: "request", name: "sessionFilePerMinute", label: "会话附件", extra: "每账号每分钟上传会话附件的次数。", unit: "次/分钟", max: 999_999 },
     { group: "request", name: "assetWritePerMinute", label: "素材写入", extra: "每账号每分钟写入素材的次数。", unit: "次/分钟", max: 999_999 },
     { group: "request", name: "canvasWritePerMinute", label: "画布写入", extra: "每账号每分钟写入画布的次数。", unit: "次/分钟", max: 999_999 },
-    { group: "request", name: "registerPerHour", label: "账号注册", extra: "每 IP 每小时允许注册的次数。", unit: "次/小时", max: 999_999 },
-    { group: "request", name: "emailCodePerHour", label: "邮箱验证码", extra: "每 IP 每小时允许请求验证码的次数。", unit: "次/小时", max: 999_999 },
+    { group: "request", name: "registerPerHour", label: "账号注册", extra: "每 IP 每小时允许的注册请求次数，包含失败尝试；多人共用网络时建议至少 30 次。", unit: "次/小时", max: 999_999 },
+    { group: "request", name: "emailCodePerHour", label: "邮箱验证码", extra: "每 IP 每小时的验证码请求次数，建议至少 60 次；单邮箱另限每小时 10 次，发送后需间隔 60 秒。", unit: "次/小时", max: 999_999 },
     { group: "request", name: "loginIPPerTenMinutes", label: "登录 IP", extra: "每 IP 每 10 分钟允许登录的次数。", unit: "次/10分钟", max: 999_999 },
     { group: "request", name: "loginAccountPerTenMinutes", label: "登录账号组合", extra: "同一 IP 与账号组合每 10 分钟的登录次数。", unit: "次/10分钟", max: 999_999 },
     { group: "request", name: "systemRelayPerMinute", label: "系统渠道中转", extra: "每账号每分钟使用系统渠道的请求数。", unit: "次/分钟", max: 999_999 },
@@ -92,6 +109,15 @@ const policySections: PolicySectionDefinition[] = [
         status: <AdminStatusBadge label="保存后热更新" tone="info" />,
     },
     { id: "policy-timeout", icon: <TimerReset className="size-4" aria-hidden="true" />, title: "任务超时", shortTitle: "任务超时", description: "不同生成类型的最长执行时间。", fields: timeoutFields },
+    {
+        id: "policy-agent",
+        icon: <Bot className="size-4" aria-hidden="true" />,
+        title: "画布 Agent 单步",
+        shortTitle: "Agent 单步",
+        description: "画布 Agent 每一步模型调用的输出上限与等待时限；两者一起决定单步最坏耗时。",
+        fields: agentFields,
+        status: <AdminStatusBadge label="保存后热更新" tone="info" />,
+    },
     { id: "policy-rate", icon: <ShieldCheck className="size-4" aria-hidden="true" />, title: "业务频控", shortTitle: "业务频控", description: "账号与 IP 维度的固定窗口请求限制。", fields: rateFields },
     { id: "policy-relay", icon: <Network className="size-4" aria-hidden="true" />, title: "渠道中转与熔断", shortTitle: "中转与熔断", description: "请求体、响应体、并发、超时和上游故障保护。", fields: relayFields },
 ];
