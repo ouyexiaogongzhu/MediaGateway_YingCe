@@ -201,7 +201,7 @@ func TestDeleteAssetAllowsTaskGeneratedResultResource(t *testing.T) {
 	resource := model.Resource{ID: "resource-taskgen", UserID: "user-1", Provider: "local", ObjectKey: "users/user-1/image/taskgen.png", Status: model.ResourceStatusReady}
 	asset := model.Asset{ID: "asset-taskgen", UserID: "user-1", Title: "任务生成图", PayloadJSON: `{"data":{"storageKey":"resource:resource-taskgen"}}`}
 	task := model.Task{
-		ID: "task-gen", UserID: "user-1", Prompt: "9:16竖版，15秒，真人写实短视频",
+		ID: "task-gen", UserID: "user-1", Prompt: "9:16竖版，15秒，真人写实短视频", Status: model.TaskStatusSucceeded,
 		InputJSON: `{}`, ResultJSON: `{"images":[{"dataUrl":"/api/resources/resource-taskgen/file","resourceId":"resource-taskgen"}]}`,
 	}
 	for _, item := range []any{&resource, &asset, &task} {
