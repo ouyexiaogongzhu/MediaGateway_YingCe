@@ -134,10 +134,24 @@ func (s *Service) signedResourceAccessURL(resource *model.Resource, variant asse
 	if err != nil {
 		return "", err
 	}
-	if base.Scheme != "https" {
+	if base.Scheme != "https" && !isLoopbackHTTPBase(base) {
+		// 本地管线例外：fork 的 MediaGateway 与画布同机，loopback HTTP 允许；
+		// 面向公网/云供应商的部署仍强制 HTTPS。
 		return "", BadAuthRequest("模型读取平台资源需要配置 HTTPS 公网访问地址")
 	}
 	return base.ResolveReference(u).String(), nil
+}
+
+// isLoopbackHTTPBase 判断是否为本机回环地址（仅 http://127.0.0.1 / localhost / [::1]）。
+func isLoopbackHTTPBase(u *url.URL) bool {
+	if u.Scheme != "http" {
+		return false
+	}
+	switch u.Hostname() {
+	case "127.0.0.1", "localhost", "::1":
+		return true
+	}
+	return false
 }
 
 func (s *Service) PreparePublicResourceDelivery(id, expires, signature string, options ResourceAccessOptions, rangeHeader string) (*ResourceDelivery, error) {
