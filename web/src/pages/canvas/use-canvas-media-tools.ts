@@ -84,6 +84,7 @@ type UseCanvasMediaToolsOptions = {
     setToolbarNodeId: Dispatch<SetStateAction<string | null>>;
     setRunningNodeId: Dispatch<SetStateAction<string | null>>;
     startUploadStatus: StartCanvasUploadStatus;
+    reloadLatestCanvasProject: () => Promise<void>;
     startGenerationRequest: (targetNodeId: string, originNodeId: string, runningId?: string, controller?: AbortController) => AbortController;
     finishGenerationRequest: (targetNodeId: string, controller: AbortController) => void;
     bindGenerationTask: (targetNodeId: string, task: GenerationTask) => void;
@@ -114,6 +115,7 @@ export function useCanvasMediaTools({
     setToolbarNodeId,
     setRunningNodeId,
     startUploadStatus,
+    reloadLatestCanvasProject,
     startGenerationRequest,
     finishGenerationRequest,
     bindGenerationTask,
@@ -144,6 +146,8 @@ export function useCanvasMediaTools({
     const segmentRunningRef = useRef(false);
     const upscalingNodeIdRef = useRef<string | null>(null);
     const [upscalingNodeId, setUpscalingNodeId] = useState<string | null>(null);
+    const scriptToStoryboardNodeIdRef = useRef<string | null>(null);
+    const [scriptToStoryboardNodeId, setScriptToStoryboardNodeId] = useState<string | null>(null);
     const [panoramaConfigNodeId, setPanoramaConfigNodeId] = useState<string | null>(null);
 
     const resolveImageEditStyle = useCallback((node: CanvasNodeData, prompt: string, config: AiConfig) => {
@@ -604,6 +608,39 @@ export function useCanvasMediaTools({
             setUpscalingNodeId(null);
         }
     }, [connectionsRef, domainProjectId, message, nodesRef, projectId, selectedNodeIdsRef, setConnections, setHoveredNodeId, setSelectedConnectionId, setSelectedNodeIds, setNodes, setToolbarNodeId, startUploadStatus]);
+
+    // 分镜脚本 → 分镜行：POST /tools/script-to-storyboard（同步，5-30s）→ 刷新画布 → 选中新节点。
+    // 分镜行节点由后端直接写入画布文档，前端只负责刷新与选中，不在本地拼节点。
+    const scriptNodeToStoryboard = useCallback(async (node: CanvasNodeData) => {
+        if (node.type !== CanvasNodeType.Script) return;
+        if (scriptToStoryboardNodeIdRef.current) {
+            message.warning("已有轉分鏰行任务进行中，请等待完成");
+            return;
+        }
+        setHoveredNodeId(null);
+        setToolbarNodeId(null);
+        scriptToStoryboardNodeIdRef.current = node.id;
+        setScriptToStoryboardNodeId(node.id);
+        const progress = startUploadStatus("轉分鏰行", "正在解析分镜脚本", 100);
+        try {
+            // 后端同步执行（约 5-30 秒）：单次请求给足超时，错误信封由 request 统一转成 ApiError。
+            const result = await request<{ nodeId: string; rows: number; dropped: number }>(apiClient.post("/tools/script-to-storyboard", { canvasId: projectId, sourceNodeId: node.id }, { timeout: 120_000 }));
+            progress.update("刷新画布数据", 90);
+            await reloadLatestCanvasProject();
+            const selection = new Set([result.nodeId]);
+            selectedNodeIdsRef.current = selection;
+            setSelectedNodeIds(selection);
+            setSelectedConnectionId(null);
+            progress.done(`已轉出 ${result.rows} 行分镜${result.dropped ? `，跳过 ${result.dropped} 行无效内容` : ""}`);
+        } catch (error) {
+            const details = error instanceof Error ? error.message : "轉分鏰行失败";
+            progress.fail(details);
+            message.error(details);
+        } finally {
+            scriptToStoryboardNodeIdRef.current = null;
+            setScriptToStoryboardNodeId(null);
+        }
+    }, [message, projectId, reloadLatestCanvasProject, selectedNodeIdsRef, setHoveredNodeId, setSelectedConnectionId, setSelectedNodeIds, setToolbarNodeId, startUploadStatus]);
 
     const mergeVideosByIds = useCallback(async (videoNodeIds: string[]) => {
         if (mergeVideoRunningRef.current) return;
@@ -1388,6 +1425,8 @@ export function useCanvasMediaTools({
         upscaleNodeId,
         upscaleVideoNode1080p,
         upscalingNodeId,
+        scriptNodeToStoryboard,
+        scriptToStoryboardNodeId,
     };
 }
 

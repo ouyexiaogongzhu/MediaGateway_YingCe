@@ -1,4 +1,4 @@
-import { AudioLines, Captions, Clapperboard, Download, FolderPlus, Images, Image as ImageIcon, Info, LoaderCircle, Lock, Maximize2, MessageSquare, Minus, MonitorUp, Music2, Plus, RefreshCw, Scissors, Settings2, Trash2, Unlock, Upload, UserRound, Video, WandSparkles } from "lucide-react";
+import { AudioLines, Captions, Clapperboard, Download, FolderPlus, Images, Image as ImageIcon, Info, LoaderCircle, Lock, Maximize2, MessageSquare, Minus, MonitorUp, Music2, Plus, RefreshCw, Scissors, Settings2, Table2, Trash2, Unlock, Upload, UserRound, Video, WandSparkles } from "lucide-react";
 
 import { CONTENT_MODERATION_ERROR_CODE, isContentModerationError } from "@/lib/generation-error";
 import { registerToolbarTools, type ToolContext, type ToolDefinition } from "@/lib/canvas/tool-registry";
@@ -11,6 +11,7 @@ function isImage(ctx: ToolContext) { return ctx.node?.type === CanvasNodeType.Im
 function isVideo(ctx: ToolContext) { return ctx.node?.type === CanvasNodeType.Video; }
 function isAudio(ctx: ToolContext) { return ctx.node?.type === CanvasNodeType.Audio; }
 function isText(ctx: ToolContext) { return ctx.node?.type === CanvasNodeType.Text; }
+function isScript(ctx: ToolContext) { return ctx.node?.type === CanvasNodeType.Script; }
 function isConfig(ctx: ToolContext) { return ctx.node?.type === CanvasNodeType.Config; }
 function hasMediaPayload(ctx: ToolContext) {
     return Boolean(ctx.nodeMetadata?.content || ctx.nodeMetadata?.storageKey || ctx.nodeMetadata?.previewContent);
@@ -131,6 +132,20 @@ export const nodeHoverToolbarTools: ToolDefinition[] = [
         applicable: (ctx) => hasUpscalableVideo(ctx) && !simpleMode(ctx),
         disabled: (ctx) => ctx.upscaling1080p,
         run: (ctx) => ctx.handlers.onNodeUpscale1080p(ctx.node!),
+    },
+    {
+        id: "scriptToStoryboard",
+        toolbar: "node-hover",
+        category: "node-state",
+        label: (ctx) => ctx.scriptingToStoryboard ? "正在轉分鏡行，约需半分钟" : "把分镜脚本轉分鏡行，生成新的分镜行节点",
+        displayLabel: (ctx) => ctx.scriptingToStoryboard ? "轉分鏰中" : "轉分鏡行",
+        icon: (ctx) => ctx.scriptingToStoryboard ? <LoaderCircle className="size-3.5 animate-spin" /> : <Table2 className="size-3.5" />,
+        defaultVisible: true,
+        defaultOrder: 47,
+        nodeToolbar: { group: "primary", order: 15, description: "解析脚本内容，生成分镜行节点" },
+        applicable: isScript,
+        disabled: (ctx) => ctx.scriptingToStoryboard,
+        run: (ctx) => ctx.handlers.onNodeScriptToStoryboard(ctx.node!),
     },
     {
         id: "saveAsset",

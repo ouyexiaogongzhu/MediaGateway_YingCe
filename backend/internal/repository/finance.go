@@ -753,7 +753,8 @@ func (r *Repository) SettleBillingOrder(id string, providerRequestID string) err
 	observedActualAvailable := false
 	err := r.db.Transaction(func(tx *gorm.DB) error {
 		var order model.BillingOrder
-		if err := tx.First(&order, "id = ?", id).Error; err != nil {
+		// 行锁 + 写入时按读到的状态 CAS，防止併发结算/退款对同一订单双重入账。
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&order, "id = ?", id).Error; err != nil {
 			return err
 		}
 		if order.Status == model.BillingStatusSettled {
@@ -815,8 +816,12 @@ func (r *Repository) SettleBillingOrder(id string, providerRequestID string) err
 			if providerRequestID != "" {
 				updates["provider_request_id"] = providerRequestID
 			}
-			if err := tx.Model(&order).Updates(updates).Error; err != nil {
-				return err
+			cas := tx.Model(&model.BillingOrder{}).Where("id = ? AND status = ?", id, order.Status).Updates(updates)
+			if cas.Error != nil {
+				return cas.Error
+			}
+			if cas.RowsAffected != 1 {
+				return ErrBillingStateConflict
 			}
 			consumeNote := ""
 			if chargeCapped {
@@ -865,8 +870,12 @@ func (r *Repository) SettleBillingOrder(id string, providerRequestID string) err
 		if providerRequestID != "" {
 			orderUpdates["provider_request_id"] = providerRequestID
 		}
-		if err := tx.Model(&order).Updates(orderUpdates).Error; err != nil {
-			return err
+		orderCAS := tx.Model(&model.BillingOrder{}).Where("id = ? AND status = ?", id, order.Status).Updates(orderUpdates)
+		if orderCAS.Error != nil {
+			return orderCAS.Error
+		}
+		if orderCAS.RowsAffected != 1 {
+			return ErrBillingStateConflict
 		}
 		return tx.Create(&model.CreditLedgerEntry{
 			ID:                         newRepositoryID(),
@@ -1038,7 +1047,8 @@ func zeroPricedTokenOrder(order model.BillingOrder) bool {
 func (r *Repository) RefundBillingOrder(id string, errorText string) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		var order model.BillingOrder
-		if err := tx.First(&order, "id = ?", id).Error; err != nil {
+		// 行锁 + 写入时按读到的状态 CAS，防止併发退款/结算对同一订单双重入账。
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&order, "id = ?", id).Error; err != nil {
 			return err
 		}
 		if order.Status == model.BillingStatusRefunded {
@@ -1067,8 +1077,12 @@ func (r *Repository) RefundBillingOrder(id string, errorText string) error {
 		}
 		now := time.Now()
 		updates := map[string]any{"status": model.BillingStatusRefunded, "error": errorText, "refunded_amount_microcredits": order.AmountMicrocredits, "refunded_at": &now, "updated_at": now}
-		if err := tx.Model(&order).Updates(updates).Error; err != nil {
-			return err
+		result := tx.Model(&model.BillingOrder{}).Where("id = ? AND status = ?", id, order.Status).Updates(updates)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return ErrBillingStateConflict
 		}
 		return tx.Create(&model.CreditLedgerEntry{
 			ID:                         newRepositoryID(),

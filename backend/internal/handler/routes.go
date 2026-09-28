@@ -17,6 +17,7 @@ func RegisterTaskRoutes(r *gin.RouterGroup, svc *service.Service) {
 	r.GET("/tools/upscale/:id", toolsUpscaleStatus(svc))
 	r.GET("/tools/upscale/:id/content", toolsUpscaleContent(svc))
 	r.POST("/tools/upscale", toolsUpscaleUpload(svc))
+	r.POST("/tools/script-to-storyboard", toolsScriptToStoryboard(svc))
 	r.GET("/admin/text-replay-stats", func(c *gin.Context) {
 		user, err := currentUser(c, svc)
 		if err != nil {

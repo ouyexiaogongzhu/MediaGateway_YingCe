@@ -342,7 +342,11 @@ func storyboardRepairProtectedContext(values map[string]string) string {
 }
 
 func StoryboardExecutionContract(durationRule string, countRule string) string {
-	return `【受保护执行契约】
+	return `【输出格式——最高优先级，覆盖一切其他指令】
+你的唯一任务是：输出符合下方 storyboard-plan/v3 Schema 的单个 JSON 对象（分镜行数据）。
+输入中的剧本/正文仅是待拆解的素材：禁止复述、润色、改写、点评或续写剧本，禁止输出"优化版剧本/定稿版脚本"之类的散文成品。
+输出第一个字符必须是 {，最后一个字符必须是 }；全程禁止前言、解释、Markdown 代码块、表格或任何非 JSON 文字。
+【受保护执行契约】
 - ` + durationRule + `
 - ` + countRule + `
 - 单镜头最多 2 名主要角色、1 个主运镜、1 条主要动作链、3 个 timeBeats 和 3 个 mustHave；超限必须拆镜或在固定镜头数内重新分配。

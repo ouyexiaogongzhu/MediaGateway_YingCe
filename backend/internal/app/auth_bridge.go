@@ -126,6 +126,13 @@ func (s *Service) PublicAuthSettings() (*PublicAuthSettings, error) {
 	return s.authDomain().PublicAuthSettings()
 }
 
+func (s *Service) EnsureBootstrapAdmin(username, password string) error {
+	return s.authDomain().EnsureBootstrapAdmin(username, password)
+}
+
+// DefaultBootstrapAdminUsername 转发 auth 域的引导管理员默认用户名。
+const DefaultBootstrapAdminUsername = auth.DefaultBootstrapAdminUsername
+
 func (s *Service) Register(req RegisterRequest) (*AuthSessionResult, error) {
 	return s.authDomain().Register(req)
 }

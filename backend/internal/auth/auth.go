@@ -153,6 +153,11 @@ func (s *Service) Register(req RegisterRequest) (*AuthSessionResult, error) {
 	var verifiedCode *model.EmailVerificationCode
 	var verification *model.AuthVerification
 	phone := ""
+	if count == 0 {
+		// 管理员只能由服务端引导创建（见 EnsureBootstrapAdmin）。否则公网部署上
+		// 第一个抢到注册接口的人将无条件获得管理员权限（可配支付渠道、调整积分）。
+		return nil, kernel.Forbidden("系统尚未初始化管理员，请先在服务端通过 CANVAS_ADMIN_PASSWORD 引导创建管理员账号")
+	}
 	if count > 0 {
 		registrationEnabled, err := s.RegistrationEnabled()
 		if err != nil {
@@ -221,9 +226,6 @@ func (s *Service) Register(req RegisterRequest) (*AuthSessionResult, error) {
 		PasswordHash: passwordHash,
 		CreatedAt:    now,
 		UpdatedAt:    now,
-	}
-	if count == 0 {
-		user.Role = model.UserRoleAdmin
 	}
 	if verification != nil {
 		if email != "" {

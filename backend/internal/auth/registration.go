@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"infinite-canvas/backend/internal/kernel"
 	"infinite-canvas/backend/internal/model"
 
 	"gorm.io/gorm"
@@ -151,4 +152,39 @@ func publicRegistrationSetting(setting *model.SystemSetting, value registrationS
 func registrationEnabledFromEnvironment() bool {
 	value := strings.ToLower(strings.TrimSpace(os.Getenv("CANVAS_REGISTRATION_ENABLED")))
 	return value == "1" || value == "true" || value == "yes"
+}
+
+// DefaultBootstrapAdminUsername 是未配置 CANVAS_ADMIN_USERNAME 时引导管理员的用户名。
+const DefaultBootstrapAdminUsername = "admin"
+
+// EnsureBootstrapAdmin 在数据库尚无任何用户时创建初始管理员。它必须在端口开始监听
+// 前调用，用于消除"第一个注册者即管理员"的公网抢占窗口；已有用户时是 no-op。
+func (s *Service) EnsureBootstrapAdmin(username, password string) error {
+	s.registrationMu.Lock()
+	defer s.registrationMu.Unlock()
+	count, err := s.repo.UserCount()
+	if err != nil || count > 0 {
+		return err
+	}
+	username = NormalizeUsername(username)
+	if err := ValidateUsername(username); err != nil {
+		return err
+	}
+	if err := ValidatePassword(password); err != nil {
+		return err
+	}
+	passwordHash, err := HashPassword(password)
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	return s.repo.Create(&model.User{
+		ID:           kernel.NewID(),
+		Username:     username,
+		Role:         model.UserRoleAdmin,
+		Status:       model.UserStatusActive,
+		PasswordHash: passwordHash,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	})
 }
