@@ -20,7 +20,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// 验证 newapi(OpenAI Videos) multipart：全部参考图逐值进 input_images，首帧/静音透传。
+// 验证 newapi(OpenAI Videos) multipart 的 h3 三模式路由：带首帧时只发帧字段
+// （h3 的 Ref2VA 与首尾帧互斥，有 refs 时首帧会被静默忽略），静音透传。
 func TestRunVideoTaskNewAPISendsAllImagesAndFrameFields(t *testing.T) {
 	t.Setenv("CANVAS_ALLOW_PRIVATE_UPSTREAMS", "true")
 	center, err := newPluginRuntime(t.TempDir())
@@ -65,11 +66,11 @@ func TestRunVideoTaskNewAPISendsAllImagesAndFrameFields(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if got := formValues["input_images"]; len(got) != 3 || got[0] != "https://example.com/a.png" || got[2] != testReferenceImageDataURL {
-		t.Fatalf("input_images = %#v, want 3 张参考图原样", got)
-	}
 	if got := formValues["first_frame_image"]; len(got) != 1 || got[0] != "data:image/png;base64,AAAA" {
 		t.Fatalf("first_frame_image = %#v", got)
+	}
+	if got, exists := formValues["input_images"]; exists {
+		t.Fatalf("带首帧时不应并发 input_images（h3 Ref2VA 会忽略首尾帧）：%#v", got)
 	}
 	if got := formValues["mute_audio"]; len(got) != 1 || got[0] != "false" {
 		t.Fatalf("mute_audio = %#v, want [\"false\"]", got)

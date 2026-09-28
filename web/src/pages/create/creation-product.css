@@ -272,3 +272,9 @@ html:not(.dark) .app-product-overlays .creation-control-popover .ant-popover-inn
 html:not(.dark) .app-product-overlays .creation-control-popover-surface {
     box-shadow: 0 16px 40px rgba(25, 25, 30, .12) !important;
 }
+
+/* 生成模式菜单（VideoModeMenu）：四个文字项比时长预设长，放宽容器并改两列。
+   globals.css 末尾对 .creation-duration-menu/choices 用了 !important（width:270px、6 列网格），这里必须同级覆盖。 */
+.creation-duration-menu.is-mode-menu { width: 300px !important; }
+.creation-duration-menu.is-mode-menu .creation-duration-choices { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 4px !important; }
+.creation-duration-menu.is-mode-menu .creation-duration-choices button { height: 30px; padding: 0 10px; white-space: nowrap; }

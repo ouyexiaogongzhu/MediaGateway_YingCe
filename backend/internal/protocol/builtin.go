@@ -196,6 +196,11 @@ func openAIVideosAdapter() Adapter {
 	info.LegacyAliases = []string{"openai-video", "openai-videos"}
 	info.Parameters = openAIVideoParams()
 	adapter := videoAdapter(info, func(r GenerationRequest) (RequestSpec, error) {
+		// 参数表声明 videos/audios unsupported；这里显式拒绝而不是静默丢弃——
+		// 否则能力配置一旦误放开 maxVideos，续写任务会无声产出与源无关的文生视频。
+		if len(r.Videos) > 0 || len(r.Audios) > 0 {
+			return RequestSpec{}, fmt.Errorf("OpenAI Videos 协议当前不支持参考视频或参考音频")
+		}
 		body := map[string]any{"model": r.Model, "prompt": r.Prompt}
 		if r.Duration > 0 {
 			body["seconds"] = strconv.Itoa(r.Duration)
@@ -203,12 +208,39 @@ func openAIVideosAdapter() Adapter {
 		if r.AspectRatio != "" {
 			body["size"] = r.AspectRatio
 		}
-		if len(r.Images) > 0 {
-			// 全部参考图逐张放进多值字段 input_images；protocolFormValues 展开为重复表单字段。
-			body["input_images"] = mediaValues(r.Images)
+		// h3 三模式路由（Gateway 侧 ref2va = reference_count != 0，Ref2VA 与首尾帧互斥）：
+		// 帧字段（Role 标注或分镜 firstFrameImage Extra）无条件发送——分镜工作流的
+		// videoEditOperation 就是 text_to_video 但必须带首帧；无帧参考图才进多值字段
+		// input_images（protocolFormValues 展开为重复表单字段），纯文生不携带任何图片。
+		var firstFrame, lastFrame string
+		refs := make([]MediaReference, 0, len(r.Images))
+		for _, image := range r.Images {
+			switch strings.TrimSpace(image.Role) {
+			case "first_frame":
+				firstFrame = mediaValue(image)
+			case "last_frame":
+				lastFrame = mediaValue(image)
+			default:
+				refs = append(refs, image)
+			}
 		}
-		if value, ok := r.Extra["firstFrameImage"].(string); ok && value != "" {
-			body["first_frame_image"] = value
+		if firstFrame == "" {
+			if extra, ok := r.Extra["firstFrameImage"].(string); ok {
+				firstFrame = strings.TrimSpace(extra)
+			}
+		}
+		if firstFrame != "" || lastFrame != "" {
+			// 有帧走 FL2VA：不再并发 input_images，否则 h3 判成 Ref2VA 并静默忽略首尾帧。
+			if firstFrame != "" {
+				body["first_frame_image"] = firstFrame
+			}
+			if lastFrame != "" {
+				body["last_frame_image"] = lastFrame
+			}
+		} else if r.Operation != "text_to_video" {
+			if images := mediaValues(refs); len(images) > 0 {
+				body["input_images"] = images
+			}
 		}
 		if value, ok := r.Extra["muteAudio"].(bool); ok {
 			// multipart 序列化时由 protocolFormValues 转成 "true"/"false" 字符串。
@@ -235,7 +267,7 @@ func openAIVideoParams() []Parameter {
 	return []Parameter{
 		{Name: "model", Type: "string", Required: true, Mapping: "model", Description: "Sora 等视频模型标识。"},
 		{Name: "prompt", Type: "string", Required: true, Mapping: "prompt", Description: "视频生成提示词。"},
-		{Name: "images", Type: "media[]", Mapping: "input_images", Description: "可选参考图，全部作为 input_images 多值表单字段发送（dataURL/URL 原样）。"},
+		{Name: "images", Type: "media[]", Mapping: "first_frame_image/last_frame_image/input_images", Description: "按角色路由：first_frame/last_frame 角色映射为首尾帧字段（与参考图互斥）；无帧参考图仅在非 text_to_video 时作为 input_images 多值字段发送；纯文生不携带图片。"},
 		{Name: "duration", Type: "integer", Mapping: "seconds", Description: "视频时长，单位为秒。"},
 		{Name: "aspectRatio", Type: "string", Mapping: "size", Description: "视频尺寸，例如 1280x720；该协议使用 size 而不是独立的 aspect_ratio。"},
 		{Name: "videos", Type: "media[]", Mapping: "unsupported", Description: "OpenAI Videos 当前适配器不发送参考视频。"},

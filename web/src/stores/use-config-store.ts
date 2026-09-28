@@ -497,8 +497,6 @@ function isVideoModelName(model: string) {
         value.includes("stable-video") ||
         value.includes("svd") ||
         value.includes("animatediff") ||
-        value.includes("ltx-video") ||
-        value.includes("ltxvideo") ||
         value.includes("minimax-video") ||
         value.includes("abab-video")
     );

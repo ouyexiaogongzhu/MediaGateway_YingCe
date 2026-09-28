@@ -181,7 +181,7 @@ export function CanvasNodePromptPanel({ projectId, node, isRunning, onPromptChan
     const credits = routeQuote ? routeQuote.amountMicrocredits / 1_000_000 : configuredCredits;
     const activeReferenceCount = activeReferences.length;
     const videoFrameOptions = resolvedMentionReferences.filter((item) => item.active && item.kind === "image").map((item) => ({ nodeId: item.nodeId, label: item.label, title: item.title, previewUrl: item.previewUrl }));
-    const hasVideoPromptTools = mode === "video" && !simpleMode && videoFrameOptions.length > 0;
+    const hasVideoPromptTools = mode === "video" && !simpleMode;
     const monochromeAccent = theme.node.activeStroke;
     const composerTokens = {
         "--canvas-composer-surface": theme.node.panel,

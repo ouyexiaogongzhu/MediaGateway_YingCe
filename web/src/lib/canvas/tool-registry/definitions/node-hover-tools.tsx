@@ -1,9 +1,10 @@
-import { AudioLines, Captions, Clapperboard, Download, FolderPlus, Images, Image as ImageIcon, Info, LoaderCircle, Lock, Maximize2, MessageSquare, Minus, Music2, Plus, RefreshCw, Scissors, Settings2, Trash2, Unlock, Upload, UserRound, Video, WandSparkles } from "lucide-react";
+import { AudioLines, Captions, Clapperboard, Download, FolderPlus, Images, Image as ImageIcon, Info, LoaderCircle, Lock, Maximize2, MessageSquare, Minus, MonitorUp, Music2, Plus, RefreshCw, Scissors, Settings2, Trash2, Unlock, Upload, UserRound, Video, WandSparkles } from "lucide-react";
 
 import { CONTENT_MODERATION_ERROR_CODE, isContentModerationError } from "@/lib/generation-error";
 import { registerToolbarTools, type ToolContext, type ToolDefinition } from "@/lib/canvas/tool-registry";
 import { CanvasNodeType } from "@/types/canvas";
 import { isCanvasImageSourceNode } from "@/lib/canvas/canvas-image-source";
+import { resourceIdFromStorageKey } from "@/services/api/resources";
 
 // 节点状态判定辅助函数——从 ToolContext 派生
 function isImage(ctx: ToolContext) { return ctx.node?.type === CanvasNodeType.Image; }
@@ -16,6 +17,7 @@ function hasMediaPayload(ctx: ToolContext) {
 }
 function hasImage(ctx: ToolContext) { return isImage(ctx) && hasMediaPayload(ctx); }
 function hasVideo(ctx: ToolContext) { return isVideo(ctx) && hasMediaPayload(ctx); }
+function hasUpscalableVideo(ctx: ToolContext) { return hasVideo(ctx) && Boolean(ctx.nodeMetadata?.storageKey && resourceIdFromStorageKey(ctx.nodeMetadata.storageKey)); }
 function hasAudio(ctx: ToolContext) { return isAudio(ctx) && Boolean(ctx.nodeMetadata?.content || ctx.nodeMetadata?.storageKey); }
 function isCharacterReference(ctx: ToolContext) { return isText(ctx) && ctx.nodeMetadata?.workflowKind === "character" && Boolean(ctx.nodeMetadata?.characterAssetId); }
 function isEditableText(ctx: ToolContext) { return isText(ctx) && !isCharacterReference(ctx); }
@@ -115,6 +117,20 @@ export const nodeHoverToolbarTools: ToolDefinition[] = [
         applicable: (ctx) => hasVideo(ctx) && !simpleMode(ctx),
         disabled: (ctx) => ctx.extractingAudio || ctx.trimmingVideo,
         run: (ctx) => ctx.handlers.onNodeTrimVideoSegments(ctx.node!),
+    },
+    {
+        id: "upscale1080p",
+        toolbar: "node-hover",
+        category: "node-state",
+        label: (ctx) => ctx.upscaling1080p ? "正在超分到 1080P，约需数分钟" : "视频超分到 1080P，生成新的高清视频节点",
+        displayLabel: (ctx) => ctx.upscaling1080p ? "超分中" : "超分 1080p",
+        icon: (ctx) => ctx.upscaling1080p ? <LoaderCircle className="size-3.5 animate-spin" /> : <MonitorUp className="size-3.5" />,
+        defaultVisible: true,
+        defaultOrder: 46,
+        nodeToolbar: { group: "process", order: 30, section: "提取素材", description: "AI 超分到 1080P，保留原视频" },
+        applicable: (ctx) => hasUpscalableVideo(ctx) && !simpleMode(ctx),
+        disabled: (ctx) => ctx.upscaling1080p,
+        run: (ctx) => ctx.handlers.onNodeUpscale1080p(ctx.node!),
     },
     {
         id: "saveAsset",

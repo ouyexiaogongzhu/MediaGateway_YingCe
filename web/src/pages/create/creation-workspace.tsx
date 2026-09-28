@@ -339,6 +339,9 @@ type ComposerProps = {
     setQuality: (value: string) => void;
     videoQuality: string;
     setVideoQuality: (value: string) => void;
+    /** "auto" = 按连接素材推导；显式值 = 用户固定的 h3 生成模式（T2VA/FL2VA/Ref2VA）。 */
+    videoOperation: string;
+    setVideoOperation: (value: string) => void;
     count: string;
     setCount: (value: string) => void;
     textStreaming: boolean;
@@ -614,6 +617,7 @@ export function CreationComposer(props: ComposerProps) {
 				<ModelPicker config={props.config} value={props.model} onChange={props.onModelChange} capability={props.mode} requirements={props.modelRequirements} className="creation-model-picker" placeholder={`选择${modeLabels[props.mode]}模型`} showSelectedPrice={false} showOptionPrices variant="creation" />
                 {props.mode === "video" || (props.mode === "image" && imageSettingsSupported) ? <GenerationSettingsMenu {...props} /> : null}
                 {props.mode === "video" ? <DurationMenu profile={props.videoProfile} seconds={props.seconds} onChange={props.setSeconds} /> : null}
+                {props.mode === "video" ? <VideoModeMenu value={props.videoOperation} onChange={props.setVideoOperation} /> : null}
                 {props.mode === "text" ? <>
                     <Tooltip title={interactionBusy ? "生成中，此开关将在下次发送时生效" : (props.textStreaming ? "流式输出已开启" : "流式输出已关闭")}><button type="button" className="creation-chat-control" aria-pressed={props.textStreaming} disabled={interactionBusy} onClick={() => props.setTextStreaming(!props.textStreaming)}><Waves /><span>流式</span></button></Tooltip>
                     <Tooltip title={interactionBusy ? "生成中，此开关将在下次发送时生效" : (props.textThinking ? "思考已开启，会展示模型返回的推理摘要" : "开启模型思考")}><button type="button" className="creation-chat-control" aria-pressed={props.textThinking} disabled={interactionBusy} onClick={() => props.setTextThinking(!props.textThinking)}><Brain /><span>思考</span></button></Tooltip>
@@ -754,6 +758,27 @@ function DurationMenu({ profile, seconds, onChange }: { profile: VideoCapability
     </> : <div className="creation-duration-choices">{presets.map((item) => <button key={item} type="button" className={item === value ? "is-selected" : ""} onClick={() => onChange(String(item))}>{item}s</button>)}</div>;
     return <Popover open={open} onOpenChange={setOpen} trigger="click" placement="bottom" arrow={false} classNames={{ root: "creation-control-popover", container: "creation-control-popover-surface", content: "creation-control-popover-content" }} content={<div className="creation-duration-menu"><div className="creation-duration-heading"><span>时长</span><strong>{value} 秒</strong></div>{durationControl}</div>}>
         <button type="button" className="creation-chat-control is-duration" aria-label={`视频时长：${value}秒`}><Clock3 /><span>{value}s</span><ChevronDown className={open ? "is-open" : ""} /></button>
+    </Popover>;
+}
+
+// h3 模式（MediaGateway）：文生=T2VA、全模态参考=Ref2VA；「自动」按已连接素材推导。
+// 不提供 FL2VA：创作页没有首/尾帧选择器，pinned image_to_video 无从产生帧字段，只会静默降级。
+const CREATION_VIDEO_MODES = [
+    { value: "auto", label: "自动" },
+    { value: "text_to_video", label: "文生 T2VA" },
+    { value: "reference_to_video", label: "参考 Ref2VA" },
+];
+
+function VideoModeMenu({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+    const [open, setOpen] = useState(false);
+    const current = CREATION_VIDEO_MODES.find((item) => item.value === value) || CREATION_VIDEO_MODES[0];
+    return <Popover open={open} onOpenChange={setOpen} trigger="click" placement="bottom" arrow={false} classNames={{ root: "creation-control-popover", container: "creation-control-popover-surface", content: "creation-control-popover-content" }} content={
+        <div className="creation-duration-menu is-mode-menu">
+            <div className="creation-duration-heading"><span>生成模式</span><strong>{current.label}</strong></div>
+            <div className="creation-duration-choices">{CREATION_VIDEO_MODES.map((item) => <button key={item.value} type="button" className={item.value === current.value ? "is-selected" : ""} onClick={() => onChange(item.value)}>{item.label}</button>)}</div>
+        </div>
+    }>
+        <button type="button" className="creation-chat-control" aria-label={`生成模式：${current.label}`}><Clapperboard /><span>{current.label}</span><ChevronDown className={open ? "is-open" : ""} /></button>
     </Popover>;
 }
 

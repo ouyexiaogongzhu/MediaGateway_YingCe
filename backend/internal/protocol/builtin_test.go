@@ -160,6 +160,72 @@ func TestImageAndVideoAdaptersMapProviderShapes(t *testing.T) {
 	}
 }
 
+// h3 三模式路由：FL2VA（首尾帧）与 Ref2VA（input_images）互斥——Gateway/h3 侧
+// ref2va = reference_count != 0，有 refs 时首尾帧被静默忽略，所以有帧时不得并发参考图。
+func TestNewAPIVideosAdapterRoutesH3Modes(t *testing.T) {
+	adapter, ok := Builtins().Get("newapi")
+	if !ok {
+		t.Fatal("adapter missing")
+	}
+	build := func(req GenerationRequest) map[string]any {
+		spec, err := adapter.BuildCreate(context.Background(), RequestContext{Request: req})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return spec.Body.(map[string]any)
+	}
+	body := build(GenerationRequest{Model: "sora-2", Prompt: "p", Operation: "text_to_video",
+		Images: []MediaReference{{URL: "https://example.com/a.png", Role: "reference_image"}}})
+	if _, bad := body["input_images"]; bad {
+		t.Fatalf("text_to_video 应不携带参考图: %v", body)
+	}
+	body = build(GenerationRequest{Model: "sora-2", Prompt: "p", Operation: "reference_to_video",
+		Images: []MediaReference{
+			{URL: "https://example.com/a.png", Role: "reference_image"},
+			{URL: "https://example.com/b.png", Role: "reference_image"},
+		}})
+	if got := body["input_images"].([]string); len(got) != 2 {
+		t.Fatalf("reference_to_video input_images = %v", got)
+	}
+	if _, bad := body["first_frame_image"]; bad {
+		t.Fatalf("reference_to_video 不应携带首帧: %v", body)
+	}
+	body = build(GenerationRequest{Model: "sora-2", Prompt: "p", Operation: "image_to_video",
+		Images: []MediaReference{
+			{URL: "https://example.com/first.png", Role: "first_frame"},
+			{URL: "https://example.com/last.png", Role: "last_frame"},
+			{URL: "https://example.com/extra.png", Role: "reference_image"},
+		}})
+	if body["first_frame_image"] != "https://example.com/first.png" || body["last_frame_image"] != "https://example.com/last.png" {
+		t.Fatalf("image_to_video 首尾帧映射错误: %v", body)
+	}
+	if _, bad := body["input_images"]; bad {
+		t.Fatalf("有帧时不应并发 input_images（h3 会忽略帧）: %v", body)
+	}
+	body = build(GenerationRequest{Model: "sora-2", Prompt: "p",
+		Images: []MediaReference{{URL: "https://example.com/a.png"}},
+		Extra:  map[string]any{"firstFrameImage": "data:image/png;base64,AAAA"}})
+	if body["first_frame_image"] != "data:image/png;base64,AAAA" {
+		t.Fatalf("无 Role 标注时 Extra firstFrameImage 应回退为首帧: %v", body)
+	}
+	if _, bad := body["input_images"]; bad {
+		t.Fatalf("首帧场景不应并发 input_images: %v", body)
+	}
+	// 分镜工作流：videoEditOperation=text_to_video 但带 firstFrameImage（「先做首帧」），首帧必须透传。
+	body = build(GenerationRequest{Model: "sora-2", Prompt: "p", Operation: "text_to_video",
+		Extra: map[string]any{"firstFrameImage": "data:image/png;base64,BBBB"}})
+	if body["first_frame_image"] != "data:image/png;base64,BBBB" {
+		t.Fatalf("分镜 text_to_video+首帧不应丢帧: %v", body)
+	}
+	// 参考视频/音频：参数表声明 unsupported，必须显式报错而不是静默丢弃。
+	if _, err := adapter.BuildCreate(context.Background(), RequestContext{Request: GenerationRequest{
+		Model: "sora-2", Prompt: "p",
+		Videos: []MediaReference{{URL: "https://example.com/clip.mp4"}},
+	}}); err == nil {
+		t.Fatal("参考视频应显式报错")
+	}
+}
+
 func TestArkVideoAdapterMapsFullModalReferences(t *testing.T) {
 	adapter, ok := Builtins().Get("volcengine-ark-video")
 	if !ok {

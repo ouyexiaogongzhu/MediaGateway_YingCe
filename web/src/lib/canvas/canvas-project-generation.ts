@@ -284,7 +284,7 @@ function resolveVideoEditOperation(
         audioCount: context?.referenceAudios.length || 0,
         characterCount: 0,
     };
-    return resolveVideoOperation(input, storedOperation) as CanvasVideoEditOperation;
+    return resolveVideoOperation(input, storedOperation, Boolean(node?.metadata?.videoOperationPinned)) as CanvasVideoEditOperation;
 }
 
 export function buildVideoGenerationMetadata(
@@ -306,6 +306,7 @@ export function buildVideoGenerationMetadata(
     return {
         ...(config ? generationWorkflowMetadata(config) : {}),
         videoEditOperation: resolveVideoEditOperation(node, context),
+        videoOperationPinned: metadata?.videoOperationPinned,
         videoCameraMoveId: metadata?.videoCameraMoveId,
         videoCameraMovePrompt: metadata?.videoCameraMovePrompt,
         videoStartFrameNodeId: startFrame,

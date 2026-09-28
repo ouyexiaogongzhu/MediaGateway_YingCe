@@ -423,6 +423,8 @@ export type CanvasNodeMetadata = {
     };
     sessionId?: string;
     videoEditOperation?: CanvasVideoEditOperation;
+    /** 用户在生成模式菜单显式指定过 videoEditOperation；未指定时按连接素材自动推导。 */
+    videoOperationPinned?: boolean;
     arkPrivateAssetUpload?: string;
     videoCameraMoveId?: string;
     videoCameraMovePrompt?: string;

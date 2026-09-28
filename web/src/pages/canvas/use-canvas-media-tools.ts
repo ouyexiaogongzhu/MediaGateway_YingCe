@@ -49,6 +49,8 @@ import { defaultImageParamsForModel } from "@/lib/model-selection";
 import { navigateToSettings } from "@/lib/settings-navigation";
 import { storeGeneratedVideo } from "@/services/api/video";
 import { getTool } from "@/services/api/tools";
+import { apiBaseURL, apiClient, request } from "@/services/api/request";
+import { resourceIdFromStorageKey } from "@/services/api/resources";
 import { getMediaBlob, uploadMediaFile } from "@/services/file-storage";
 import { getImageBlob, uploadImage } from "@/services/image-storage";
 import { ensureCanvasNodeAsset } from "@/services/project-asset-sync";
@@ -91,6 +93,10 @@ const NODE_STATUS_LOADING = "loading" as const;
 const NODE_STATUS_SUCCESS = "success" as const;
 const NODE_STATUS_ERROR = "error" as const;
 const NODE_STATUS_IDLE = "idle" as const;
+
+type UpscaleJob = { status: string; progress: number; error: string };
+// Gateway 任务状态全集 queued|running|completed|failed|cancelled；只把前两个视为进行中，其余一律终止轮询。
+const UPSCALE_ACTIVE_STATUSES = new Set(["queued", "running"]);
 
 export function useCanvasMediaTools({
     projectId,
@@ -136,6 +142,8 @@ export function useCanvasMediaTools({
     const [segmentDialogMode, setSegmentDialogMode] = useState<"audio" | "video" | null>(null);
     const [segmentRunningMode, setSegmentRunningMode] = useState<"audio" | "video" | null>(null);
     const segmentRunningRef = useRef(false);
+    const upscalingNodeIdRef = useRef<string | null>(null);
+    const [upscalingNodeId, setUpscalingNodeId] = useState<string | null>(null);
     const [panoramaConfigNodeId, setPanoramaConfigNodeId] = useState<string | null>(null);
 
     const resolveImageEditStyle = useCallback((node: CanvasNodeData, prompt: string, config: AiConfig) => {
@@ -516,6 +524,86 @@ export function useCanvasMediaTools({
             setSegmentRunningMode(null);
         }
     }, [effectiveConfig, message, runExtractVideoAudio, runTrimVideoSegments]);
+
+    // 视频 1080P 超分：POST /tools/upscale（resource_id + resolution）→ 10s 轮询进度 → 完成后下载成品并新建视频节点，原节点不动。
+    const upscaleVideoNode1080p = useCallback(async (node: CanvasNodeData) => {
+        const resourceId = resourceIdFromStorageKey(node.metadata?.storageKey);
+        if (!node.metadata?.content || !resourceId) {
+            message.warning("该视频尚未上传到云端，无法超分");
+            return;
+        }
+        if (upscalingNodeIdRef.current) {
+            message.warning("已有超分任务进行中，请等待完成");
+            return;
+        }
+        setHoveredNodeId(null);
+        setToolbarNodeId(null);
+        upscalingNodeIdRef.current = node.id;
+        setUpscalingNodeId(node.id);
+        const progress = startUploadStatus("超分 1080p", "提交超分任务", 100);
+        try {
+            const formData = new FormData();
+            formData.append("resource_id", resourceId);
+            formData.append("resolution", "1080");
+            const data = await request<{ id: string }>(apiClient.post("/tools/upscale", formData));
+            // FlashVSR 处理 15 秒片段约 5-7 分钟；固定 10 秒轮询。单次查询失败不中断，
+            // 但连续 3 次失败（任务丢失 404 / 登录过期 401 / 网络断开）视为任务终止，避免无限轮询。
+            let job: UpscaleJob = { status: "queued", progress: 0, error: "" };
+            let pollFailures = 0;
+            while (UPSCALE_ACTIVE_STATUSES.has(job.status)) {
+                await new Promise((resolve) => window.setTimeout(resolve, 10_000));
+                try {
+                    job = await request<UpscaleJob>(apiClient.get(`/tools/upscale/${data.id}`));
+                    pollFailures = 0;
+                } catch (pollError) {
+                    pollFailures += 1;
+                    if (pollFailures >= 3) throw pollError instanceof Error ? pollError : new Error("查询超分进度连续失败，任务已中止");
+                    continue;
+                }
+                if (UPSCALE_ACTIVE_STATUSES.has(job.status)) progress.update(`超分中 ${Math.round(job.progress)}%`, Math.min(97, Math.max(2, Math.round(job.progress))));
+            }
+            if (job.status !== "completed") throw new Error(job.error || "超分失败");
+            progress.update("下载超分结果并保存", 98);
+            const response = await fetch(`${apiBaseURL}/tools/upscale/${data.id}/content`, { credentials: "include" });
+            if (!response.ok) throw new Error(`下载超分结果失败（${response.status}）`);
+            const uploaded = await uploadMediaFile(await response.blob(), "video");
+            const size = fitNodeSize(uploaded.width || 1280, uploaded.height || 720, VIDEO_NODE_MAX_SIZE.width, VIDEO_NODE_MAX_SIZE.height);
+            const childId = nanoid();
+            const child: CanvasNodeData = {
+                id: childId,
+                type: CanvasNodeType.Video,
+                title: `${node.title || "视频"} · 1080P`,
+                position: { x: node.position.x + node.width + 96, y: node.position.y },
+                width: size.width,
+                height: size.height,
+                metadata: { ...videoMetadata(uploaded), prompt: `将「${node.title || "视频"}」超分到 1080P`, status: NODE_STATUS_SUCCESS },
+            };
+            const nextNodes = [...nodesRef.current, child];
+            // 源节点可能在几分钟的轮询等待中被删除：仍保留成品节点，但不挂指向已删节点的悬空连线。
+            const nextConnections = nodesRef.current.some((item) => item.id === node.id)
+                ? [...connectionsRef.current, { id: nanoid(), fromNodeId: node.id, toNodeId: childId }]
+                : connectionsRef.current;
+            nodesRef.current = nextNodes;
+            connectionsRef.current = nextConnections;
+            setNodes(nextNodes);
+            setConnections(nextConnections);
+            const selection = new Set([childId]);
+            selectedNodeIdsRef.current = selection;
+            setSelectedNodeIds(selection);
+            setSelectedConnectionId(null);
+            progress.done("已生成 1080P 视频节点");
+            void ensureCanvasNodeAsset({ canvasId: projectId, domainProjectId, node: child, source: "canvas-manual" })
+                .then((result) => setNodes((current) => current.map((item) => (item.id === childId ? { ...item, metadata: { ...item.metadata, assetId: result.assetId } } : item))))
+                .catch((assetError) => message.warning(`1080P 视频已生成，但素材库写入失败：${assetError instanceof Error ? assetError.message : "未知错误"}`));
+        } catch (error) {
+            const details = error instanceof Error ? error.message : "视频超分失败";
+            progress.fail(details);
+            message.error(details);
+        } finally {
+            upscalingNodeIdRef.current = null;
+            setUpscalingNodeId(null);
+        }
+    }, [connectionsRef, domainProjectId, message, nodesRef, projectId, selectedNodeIdsRef, setConnections, setHoveredNodeId, setSelectedConnectionId, setSelectedNodeIds, setNodes, setToolbarNodeId, startUploadStatus]);
 
     const mergeVideosByIds = useCallback(async (videoNodeIds: string[]) => {
         if (mergeVideoRunningRef.current) return;
@@ -1298,6 +1386,8 @@ export function useCanvasMediaTools({
         openVideoSegmentExtractor,
         upscaleImageNode,
         upscaleNodeId,
+        upscaleVideoNode1080p,
+        upscalingNodeId,
     };
 }
 

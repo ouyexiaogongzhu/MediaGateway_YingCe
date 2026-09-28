@@ -1,6 +1,6 @@
 import { type CSSProperties, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown, Image as ImageIcon } from "lucide-react";
+import { Check, ChevronDown, Film, Image as ImageIcon } from "lucide-react";
 
 import { canvasThemes, type CanvasTheme } from "@/lib/canvas-theme";
 import { useActiveTheme } from "@/stores/canvas/use-canvas-theme-store";
@@ -28,6 +28,14 @@ type CanvasVideoPromptToolsProps = {
 };
 
 const EMPTY_FRAME_VALUE = "__none__";
+// h3 三模式（Gateway/MediaGateway）：文生=T2VA、首尾帧=FL2VA、全模态参考=Ref2VA。
+// 「自动」按连接素材推导（历史行为）；显式选择写入 videoOperationPinned，生成时优先。
+const VIDEO_MODES: CompactMenuItem[] = [
+    { value: "auto", label: "自动" },
+    { value: "text_to_video", label: "文生视频 T2VA" },
+    { value: "image_to_video", label: "图生视频 FL2VA" },
+    { value: "reference_to_video", label: "全模态参考 Ref2VA" },
+];
 const MENU_GAP = 6;
 const MENU_MARGIN = 8;
 const MENU_ITEM_HEIGHT = 28;
@@ -41,6 +49,21 @@ export function CanvasVideoPromptTools({ metadata, frameOptions, onMetadataChang
     const setFrame = (key: "videoStartFrameNodeId" | "videoEndFrameNodeId", value: string) => {
         const next = value === EMPTY_FRAME_VALUE ? undefined : value;
         onMetadataChange(key === "videoStartFrameNodeId" ? { videoStartFrameNodeId: next } : { videoEndFrameNodeId: next });
+    };
+
+    const pinnedMode = metadata?.videoOperationPinned && metadata?.videoEditOperation ? metadata.videoEditOperation : "auto";
+    const setMode = (value: string) => {
+        if (value === "auto") {
+            onMetadataChange({ videoEditOperation: undefined, videoOperationPinned: undefined });
+            return;
+        }
+        // 帧字段在协议层无条件优先（FL2VA）：pin T2VA 必须清掉残留的首尾帧选择，
+        // 否则请求仍带 first_frame_image、h3 实际跑 FL2VA，pin 被静默忽略。
+        if (value === "text_to_video") {
+            onMetadataChange({ videoEditOperation: value as CanvasNodeMetadata["videoEditOperation"], videoOperationPinned: true, videoStartFrameNodeId: undefined, videoEndFrameNodeId: undefined });
+            return;
+        }
+        onMetadataChange({ videoEditOperation: value as CanvasNodeMetadata["videoEditOperation"], videoOperationPinned: true });
     };
 
     if (referenceMode === "all") {
@@ -67,18 +90,42 @@ export function CanvasVideoPromptTools({ metadata, frameOptions, onMetadataChang
         );
     }
 
-    if (!frameOptions.length) return null;
+    if (!frameOptions.length) {
+        return (
+            <div className="grid min-w-0 grid-cols-1 items-center gap-1" data-canvas-no-zoom onMouseDown={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
+                <ModeMenu value={pinnedMode} theme={theme} onChange={setMode} />
+            </div>
+        );
+    }
 
     return (
         <div
-            className="grid min-w-0 grid-cols-2 items-center gap-1"
+            className="grid min-w-0 grid-cols-3 items-center gap-1"
             data-canvas-no-zoom
             onMouseDown={(event) => event.stopPropagation()}
             onPointerDown={(event) => event.stopPropagation()}
         >
             <FrameMenu label="首帧" value={startFrame} options={frameOptions} theme={theme} onChange={(value) => setFrame("videoStartFrameNodeId", value)} />
             <FrameMenu label="尾帧" value={endFrame} options={frameOptions} theme={theme} onChange={(value) => setFrame("videoEndFrameNodeId", value)} />
+            <ModeMenu value={pinnedMode} theme={theme} onChange={setMode} />
         </div>
+    );
+}
+
+function ModeMenu({ value, theme, onChange }: { value: string; theme: CanvasTheme; onChange: (value: string) => void }) {
+    const selected = VIDEO_MODES.find((item) => item.value === value);
+    return (
+        <CompactMenuButton
+            theme={theme}
+            title="生成模式"
+            label={selected?.label || "自动"}
+            icon={<Film className="size-3.5 shrink-0 opacity-90" />}
+            value={value}
+            items={VIDEO_MODES}
+            menuWidth={190}
+            maxMenuHeight={160}
+            onSelect={onChange}
+        />
     );
 }
 

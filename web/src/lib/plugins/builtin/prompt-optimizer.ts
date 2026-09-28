@@ -136,7 +136,7 @@ function resolveModelAdaptationProfile(input: PromptOptimizationInput): ModelAda
                 avoid: ["不要添加 SD 权重、Midjourney 参数或模型未确认支持的控制语法。"],
             };
         }
-        if (containsAny(model, ["seedream", "jimeng", "doubao", "volcengine-ark-image", "volcengine-ark-agent-plan-image", "volcengine-jimeng-image"])) {
+        if (containsAny(model, ["seedream", "jimeng", "volcengine-ark-image", "volcengine-ark-agent-plan-image", "volcengine-jimeng-image"])) {
             return {
                 id: "seedream-image",
                 label: "Seedream / 即梦 / 火山图片模型",
@@ -211,7 +211,7 @@ function resolveModelAdaptationProfile(input: PromptOptimizationInput): ModelAda
             avoid: ["不要加入过多抽象叙事或无法在短片段中完成的事件。"],
         };
     }
-    if (containsAny(model, ["runway", "gen-3", "gen3", "minimax-video", "hailuo", "wan", "ltx-video", "hunyuan-video"])) {
+    if (containsAny(model, ["runway", "gen-3", "gen3", "minimax-video", "hailuo", "wan", "hunyuan-video"])) {
         return {
             id: "general-video-family",
             label: "通用视频模型",

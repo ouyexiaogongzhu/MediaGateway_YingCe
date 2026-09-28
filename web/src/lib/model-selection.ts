@@ -370,8 +370,9 @@ export function inferVideoOperation(input: ModelInputSummary) {
     return "text_to_video";
 }
 
-export function resolveVideoOperation(input: ModelInputSummary, storedOperation?: string) {
-    if (storedOperation && !["text_to_video", "image_to_video", "audio_to_video", "extend", "reference_to_video"].includes(storedOperation)) return storedOperation;
+export function resolveVideoOperation(input: ModelInputSummary, storedOperation?: string, pinned?: boolean) {
+    // pinned = 用户在生成模式菜单显式选择过，优先于按连接素材的自动推导。
+    if (storedOperation && (pinned || !["text_to_video", "image_to_video", "audio_to_video", "extend", "reference_to_video"].includes(storedOperation))) return storedOperation;
     return inferVideoOperation(input);
 }
 

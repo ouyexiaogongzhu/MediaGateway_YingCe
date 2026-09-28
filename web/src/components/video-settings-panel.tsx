@@ -1,4 +1,4 @@
-import { type ReactNode } from "react";
+import { type ReactNode, useEffect } from "react";
 import { InputNumber } from "antd";
 import { Switch } from "@/components/ui/base/switch";
 
@@ -18,6 +18,16 @@ const sizeOptions = [
     { value: "1024x1792", label: "长图", width: 1024, height: 1792 },
     { value: "auto", label: "auto", width: 0, height: 0 },
 ];
+
+// h3 工作流四档：288p 草稿生成 → 确认 → 576p 正片重渲 → FlashVSR 超分 1080p。
+// 原 9 档像素预设收敛为这四档；自定义像素画幅入口暂时关闭（32 倍数/像素上限校验保留，随时可恢复）。
+const VIDEO_WORKFLOW_SIZE_PRESETS = [
+    { value: "288x512", label: "草稿 豎" },
+    { value: "512x288", label: "草稿 橫" },
+    { value: "576x1024", label: "正片 豎" },
+    { value: "1024x576", label: "正片 橫" },
+];
+const VIDEO_ALLOW_CUSTOM_SIZE = false;
 
 type VideoSettingsPanelProps = {
     config: AiConfig;
@@ -40,11 +50,27 @@ export function VideoSettingsPanel({ config, onConfigChange, theme, showTitle = 
     const seconds = normalizeVideoDuration(config.videoSeconds);
     const resolution = resolveVideoResolutionValue(profile, config.vquality);
     const ratio = resolveVideoRatioValue(profile, config.size);
-    const dimensions = videoDimensionsForRatioAndResolution(ratio, resolution);
+    // 能力声明里出现 WxH 像素档位 → 收敛为工作流四档菜单（区别于 16:9 比例菜单的模型）。
+    const pixelSizeMenu = isPixelSizeMenu(profile.ratios);
+    const sizeMenuItems = pixelSizeMenu
+        ? VIDEO_WORKFLOW_SIZE_PRESETS.map((item) => ({ value: item.value, label: item.label, preview: ratioPreview(item.value) }))
+        : profile.ratios.map((value) => ({ value, label: value, preview: ratioPreview(value) }));
+    const activeSize = pixelSizeMenu ? sizeMenuItems.find((item) => item.value === ratio)?.value || nearestWorkflowSize(ratio) || ratio : ratio;
+    const dimensions = pixelSizeMenu ? pixelDimensions(activeSize) : videoDimensionsForRatioAndResolution(ratio, resolution);
     const sizeSupported = profile.ratios.length > 0;
     const configuredResolutions = profile.resolutions.map((value) => ({ value, label: formatVideoResolutionLabel(value) }));
     const generateAudio = boolConfig(config.videoGenerateAudio, profile.generateAudio.default);
     const watermark = boolConfig(config.videoWatermark, profile.watermark.default);
+
+    // 遗留项目存的是已下线的画幅（如 864x480、768x1344）：打开设置时归一到最近的工作流档，
+    // 生成请求（Gateway /v1/videos 的 size=WxH）随之落回四档之内，而不是继续发旧尺寸。
+    // 已是四档之一时不得回吸——正片两档的"最近档"是草稿，否则正片选择会被立即打回草稿。
+    useEffect(() => {
+        if (!pixelSizeMenu) return;
+        if (VIDEO_WORKFLOW_SIZE_PRESETS.some((item) => item.value === ratio)) return;
+        const fallbackSize = nearestWorkflowSize(ratio);
+        if (fallbackSize && fallbackSize !== config.size) onConfigChange("size", fallbackSize);
+    }, [pixelSizeMenu, ratio, config.size, onConfigChange]);
 
     return (
         <ImageSettingsTheme theme={theme}>
@@ -65,22 +91,22 @@ export function VideoSettingsPanel({ config, onConfigChange, theme, showTitle = 
                         <span className="text-xs opacity-45">×</span>
                         <DimensionValue prefix="H" value={dimensions.height} theme={theme} />
                     </div> : null}
-                    <div className="grid grid-cols-3 gap-1.5">
-                        {profile.ratios.map((value) => (
+                    <div className={pixelSizeMenu ? "grid grid-cols-2 gap-1.5" : "grid grid-cols-3 gap-1.5"}>
+                        {sizeMenuItems.map((item) => (
                             <button
-                                key={value}
+                                key={item.value}
                                 type="button"
                                 className="flex h-8 cursor-pointer items-center justify-center gap-1.5 rounded-md px-1 text-[var(--fs-label)] font-medium transition-colors hover:brightness-110 focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-1"
-                                style={{ background: ratio === value ? theme.toolbar.activeBg : "transparent", color: theme.node.text, outlineColor: theme.node.muted }}
+                                style={{ background: activeSize === item.value ? theme.toolbar.activeBg : "transparent", color: theme.node.text, outlineColor: theme.node.muted }}
                                 onMouseDown={(event) => event.stopPropagation()}
-                                onClick={() => onConfigChange("size", value)}
+                                onClick={() => onConfigChange("size", item.value)}
                             >
-                                <SizePreview width={ratioPreview(value).width} height={ratioPreview(value).height} color={theme.node.text} />
-                                <span>{value}</span>
+                                <SizePreview width={item.preview.width} height={item.preview.height} color={theme.node.text} />
+                                <span>{item.label}</span>
                             </button>
                         ))}
                     </div>
-                    {profile.allowCustomSize ? <CustomVideoSizeInput value={config.size} theme={theme} onChange={(value) => onConfigChange("size", value)} /> : null}
+                    {VIDEO_ALLOW_CUSTOM_SIZE && profile.allowCustomSize ? <CustomVideoSizeInput value={config.size} theme={theme} onChange={(value) => onConfigChange("size", value)} /> : null}
                 </SettingGroup> : null}
                 <SettingGroup title="秒数" color={theme.node.muted}>
 					<VideoDurationControl profile={profile} value={Number(seconds)} theme={theme} disabled={(value) => !hasPriceTierForVideoSelection(priceTiers, resolution, value)} onChange={(value) => onConfigChange("videoSeconds", String(value))} />
@@ -344,6 +370,8 @@ function SizePreview({ width, height, color }: { width: number; height: number; 
 }
 
 function ratioPreview(ratio: string) {
+    const pixel = /^(\d{2,4})x(\d{2,4})$/.exec(ratio);
+    if (pixel) return { width: Number(pixel[1]), height: Number(pixel[2]) };
     if (ratio === "9:16") return { width: 9, height: 16 };
     if (ratio === "1:1") return { width: 1, height: 1 };
     if (ratio === "4:3") return { width: 4, height: 3 };
@@ -364,6 +392,23 @@ function SwitchRow({ label, checked, theme, onChange }: { label: string; checked
             </span>
         </div>
     );
+}
+
+// 能力声明的画幅档里出现像素 WxH（如 512x288）即视为像素预设菜单，走工作流四档收敛。
+function isPixelSizeMenu(ratios: string[]) {
+    return ratios.some((value) => /^\d{2,4}x\d{2,4}$/.test(value));
+}
+
+// 已下线的遗留画幅按方向归档：竖屏归草稿竖、横屏归草稿横（草稿最便宜，重渲再升正片）。
+function nearestWorkflowSize(value: string) {
+    const match = /^(\d{2,4})x(\d{2,4})$/.exec((value || "").trim());
+    if (!match) return undefined;
+    return Number(match[2]) > Number(match[1]) ? "288x512" : "512x288";
+}
+
+function pixelDimensions(value: string) {
+    const match = /^(\d{2,4})x(\d{2,4})$/.exec((value || "").trim());
+    return match ? { width: Number(match[1]), height: Number(match[2]) } : undefined;
 }
 
 function CustomVideoSizeInput({ value, theme, onChange }: { value: string; theme: CanvasTheme; onChange: (value: string) => void }) {

@@ -97,6 +97,7 @@ export type ToolbarHandlers = {
     onNodeExtractVideoFrames: (node: CanvasNodeData) => void;
     onNodeExtractAudioFromVideo: (node: CanvasNodeData) => void;
     onNodeTrimVideoSegments: (node: CanvasNodeData) => void;
+    onNodeUpscale1080p: (node: CanvasNodeData) => void;
     onNodeSubtitles: (node: CanvasNodeData) => void;
     onNodeTimeline: (node: CanvasNodeData) => void;
     onNodeReversePrompt: (node: CanvasNodeData) => void;
@@ -124,6 +125,8 @@ export type ToolContext = {
     /** 视频音频提取/片段截取进行中（节点悬停工具栏用） */
     extractingAudio: boolean;
     trimmingVideo: boolean;
+    /** 视频 1080P 超分进行中（节点悬停工具栏用） */
+    upscaling1080p: boolean;
     /** 合并视频中（多选工具栏用） */
     mergingVideos: boolean;
     /** 主工具栏面板开关状态（仅主工具栏使用） */

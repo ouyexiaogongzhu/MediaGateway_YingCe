@@ -27,6 +27,7 @@ const settingsMockContext: ToolContext = {
     extractingVideoFrames: false,
     extractingAudio: false,
     trimmingVideo: false,
+    upscaling1080p: false,
     mergingVideos: false,
     addPanelOpen: false,
     appearancePanelOpen: false,

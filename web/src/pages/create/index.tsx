@@ -109,6 +109,8 @@ export default function CreatePage() {
     const [seconds, setSeconds] = useState("6");
     const [quality, setQuality] = useState("auto");
     const [videoQuality, setVideoQuality] = useState(config.vquality || "720");
+    // "auto" = 按已连接素材推导生成模式；显式值固定 h3 三模式（T2VA/FL2VA/Ref2VA）。
+    const [videoOperationMode, setVideoOperationMode] = useState("auto");
     const [count, setCount] = useState(String(Math.max(1, Math.min(4, Number(config.count) || 1))));
     const [textStreaming, setTextStreaming] = useState(() => readComposerPref(TEXT_STREAMING_PREF_KEY, true));
     const [textThinking, setTextThinking] = useState(() => readComposerPref(TEXT_THINKING_PREF_KEY, false));
@@ -595,7 +597,7 @@ export default function CreatePage() {
         const references = selectedCreationReferences(text, mentionReferences);
         // 后端对图片和视频使用不同的参考字段；这里先拆分，避免媒体类型在写入任务时被误判。
         const { referenceImages, referenceVideos, referenceAudios } = splitCreationAttachments(attachments);
-        const videoOperation = inferVideoOperation({
+        const videoOperation = videoOperationMode !== "auto" ? videoOperationMode : inferVideoOperation({
             textCount: text ? 1 : 0,
             imageCount: referenceImages.length,
             videoCount: referenceVideos.length,
@@ -744,7 +746,7 @@ export default function CreatePage() {
                     referenceVideos,
                     referenceAudios,
                     signal: requestLifecycle.signal,
-                    metadata: { source: "create-page", conversationId: activeConversation.id, messageId: assistantMessage.id, videoEditOperation: videoOperation, ...referenceMetadata },
+                    metadata: { source: "create-page", conversationId: activeConversation.id, messageId: assistantMessage.id, videoEditOperation: videoOperation, videoOperationPinned: videoOperationMode !== "auto" || undefined, ...referenceMetadata },
                     onTaskUpdate: bindTask,
                     ...retryContext,
                 }));
@@ -997,6 +999,8 @@ export default function CreatePage() {
         setQuality: setComposerQuality,
         videoQuality,
         setVideoQuality: setComposerVideoQuality,
+        videoOperation: videoOperationMode,
+        setVideoOperation: setVideoOperationMode,
         count,
         setCount: setComposerCount,
         textStreaming,
