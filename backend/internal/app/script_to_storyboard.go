@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"infinite-canvas/backend/internal/model"
 )
 
 // 脚本节点 → 分镜脚本节点转换工具（POST /api/tools/script-to-storyboard）。
@@ -24,30 +26,53 @@ var scriptToStoryboardFieldAliases = map[string]string{
 }
 
 func (s *Service) ScriptToStoryboard(userID, canvasID, sourceNodeID string) (map[string]any, error) {
-	canvas, err := s.repo.CanvasProjectForUser(userID, canvasID)
+	text, err := s.scriptNodeContent(userID, canvasID, sourceNodeID)
 	if err != nil {
 		return nil, err
+	}
+	return s.ScriptToStoryboardText(userID, canvasID, sourceNodeID, text)
+}
+
+// scriptNodeContent 读源脚本节点文本（节点 metadata.content），供转换与生成分镜行共用。
+func (s *Service) scriptNodeContent(userID, canvasID, sourceNodeID string) (string, error) {
+	_, _, source, err := s.canvasDocumentForNode(userID, canvasID, sourceNodeID)
+	if err != nil {
+		return "", err
+	}
+	metadata, _ := source["metadata"].(map[string]any)
+	if metadata == nil {
+		return "", nil
+	}
+	return stringValue(metadata["content"]), nil
+}
+
+// canvasDocumentForNode 加载画布文档并确认源节点存在，返回画布记录、文档与源节点。
+func (s *Service) canvasDocumentForNode(userID, canvasID, sourceNodeID string) (*model.CanvasProject, map[string]any, map[string]any, error) {
+	canvas, err := s.repo.CanvasProjectForUser(userID, canvasID)
+	if err != nil {
+		return nil, nil, nil, err
 	}
 	doc, err := creationDocument(canvas.PayloadJSON)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
-	var source map[string]any
 	for _, node := range creationMaps(doc["nodes"]) {
 		if stringValue(node["id"]) == sourceNodeID {
-			source = node
-			break
+			return canvas, doc, node, nil
 		}
 	}
-	if source == nil {
-		return nil, NotFound("未找到源节点")
+	return nil, nil, nil, NotFound("未找到源节点")
+}
+
+// ScriptToStoryboardText 是转换核心：把给定文本按分镜行 schema 宽松解析、归一，
+// 在源节点右侧落成新分镜行节点并保存画布。转换工具与生成分镜行工具共用；
+// 文本为空或没有可解析行时报错，由调用方决定错误口径。
+func (s *Service) ScriptToStoryboardText(userID, canvasID, sourceNodeID, text string) (map[string]any, error) {
+	canvas, doc, source, err := s.canvasDocumentForNode(userID, canvasID, sourceNodeID)
+	if err != nil {
+		return nil, err
 	}
-	metadata, _ := source["metadata"].(map[string]any)
-	text := ""
-	if metadata != nil {
-		text = stringValue(metadata["content"])
-	}
-	if text == "" {
+	if strings.TrimSpace(text) == "" {
 		return nil, BadAuthRequest("源节点没有文本内容")
 	}
 	rows, dropped, err := parseScriptStoryboardRows(text)

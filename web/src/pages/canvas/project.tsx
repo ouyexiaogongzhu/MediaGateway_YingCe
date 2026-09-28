@@ -909,6 +909,8 @@ function InfiniteCanvasPage() {
         upscalingNodeId,
         scriptNodeToStoryboard,
         scriptToStoryboardNodeId,
+        generateStoryboardRows,
+        generateStoryboardRowsNodeId,
     } = useCanvasMediaTools({
         projectId,
         domainProjectId: linkedProjectId,
@@ -3007,6 +3009,7 @@ function InfiniteCanvasPage() {
                             onTrimVideoSegments={openVideoSegmentExtractor}
                             onUpscale1080p={(node) => void upscaleVideoNode1080p(node)}
                             onScriptToStoryboard={(node) => void scriptNodeToStoryboard(node)}
+                            onGenerateStoryboardRows={(node) => void generateStoryboardRows(node)}
                             onSubtitles={(node) => setSubtitleNodeId(node.id)}
                             onTimeline={(node) => setTimelineNodeId(node.id)}
                             extractingVideoFrames={toolbarNode?.id === extractingVideoFramesNodeId}
@@ -3014,6 +3017,7 @@ function InfiniteCanvasPage() {
                             trimmingVideo={segmentRunningMode === "video"}
                             upscaling1080p={toolbarNode?.id === upscalingNodeId}
                             scriptingToStoryboard={toolbarNode?.id === scriptToStoryboardNodeId}
+                            generatingStoryboardRows={toolbarNode?.id === generateStoryboardRowsNodeId}
                             onNineGrid={(node, id, label, icon) => void generateNineGridNode(node, id, label, icon)}
                             onReversePrompt={createImageReversePromptNodes}
                             onRetry={retryCanvasNode}

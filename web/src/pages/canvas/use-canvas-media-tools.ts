@@ -64,7 +64,7 @@ function normalizeMaskEditQuality(quality: string | undefined, size: string | un
     const pixels = Number(match[1]) * Number(match[2]);
     return pixels <= 2_000_000 ? "1k" : pixels <= 4_300_000 ? "2k" : pixels <= 8_294_400 ? "4k" : quality || "auto";
 }
-import { defaultConfig, resolveModelRequestConfig, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { defaultConfig, logicalModelIDForConfig, resolveModelRequestConfig, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { CanvasNodeType, type CanvasConnection, type CanvasNodeData, type ContextMenuState } from "@/types/canvas";
 import type { StartCanvasUploadStatus } from "./use-canvas-upload";
 
@@ -148,6 +148,8 @@ export function useCanvasMediaTools({
     const [upscalingNodeId, setUpscalingNodeId] = useState<string | null>(null);
     const scriptToStoryboardNodeIdRef = useRef<string | null>(null);
     const [scriptToStoryboardNodeId, setScriptToStoryboardNodeId] = useState<string | null>(null);
+    const generateStoryboardRowsNodeIdRef = useRef<string | null>(null);
+    const [generateStoryboardRowsNodeId, setGenerateStoryboardRowsNodeId] = useState<string | null>(null);
     const [panoramaConfigNodeId, setPanoramaConfigNodeId] = useState<string | null>(null);
 
     const resolveImageEditStyle = useCallback((node: CanvasNodeData, prompt: string, config: AiConfig) => {
@@ -641,6 +643,46 @@ export function useCanvasMediaTools({
             setScriptToStoryboardNodeId(null);
         }
     }, [message, projectId, reloadLatestCanvasProject, selectedNodeIdsRef, setHoveredNodeId, setSelectedConnectionId, setSelectedNodeIds, setToolbarNodeId, startUploadStatus]);
+
+    // 生成分鏰行：契约指令由后端注入，文本模型同步拆解（长剧本可达数分钟，timeout 600s），
+    // 分镜行节点同样由后端落盘，前端只刷新与选中新节点。
+    const generateStoryboardRows = useCallback(async (node: CanvasNodeData) => {
+        if (node.type !== CanvasNodeType.Script) return;
+        if (generateStoryboardRowsNodeIdRef.current) {
+            message.warning("已有生成分鏰行任务进行中，请等待完成");
+            return;
+        }
+        setHoveredNodeId(null);
+        setToolbarNodeId(null);
+        generateStoryboardRowsNodeIdRef.current = node.id;
+        setGenerateStoryboardRowsNodeId(node.id);
+        const progress = startUploadStatus("生成分鏰行", "正在调用文本模型拆解劇本", 100);
+        try {
+            // 与脚本节点文本生成同源解析模型：节点选择 → 全局文本模型。
+            const generationConfig = buildGenerationConfig(effectiveConfig, node, "text");
+            const logicalModelId = logicalModelIDForConfig(generationConfig);
+            const result = await request<{ nodeId: string; rows: number; dropped: number }>(apiClient.post("/tools/generate-storyboard-rows", {
+                canvasId: projectId,
+                sourceNodeId: node.id,
+                model: generationConfig.model,
+                ...(logicalModelId ? { logicalModelId } : {}),
+            }, { timeout: 600_000 }));
+            progress.update("刷新画布数据", 90);
+            await reloadLatestCanvasProject();
+            const selection = new Set([result.nodeId]);
+            selectedNodeIdsRef.current = selection;
+            setSelectedNodeIds(selection);
+            setSelectedConnectionId(null);
+            progress.done(`已生成 ${result.rows} 行分镜${result.dropped ? `，跳过 ${result.dropped} 行无效内容` : ""}`);
+        } catch (error) {
+            const details = error instanceof Error ? error.message : "生成分鏰行失败";
+            progress.fail(details);
+            message.error(details);
+        } finally {
+            generateStoryboardRowsNodeIdRef.current = null;
+            setGenerateStoryboardRowsNodeId(null);
+        }
+    }, [effectiveConfig, message, projectId, reloadLatestCanvasProject, selectedNodeIdsRef, setHoveredNodeId, setSelectedConnectionId, setSelectedNodeIds, setToolbarNodeId, startUploadStatus]);
 
     const mergeVideosByIds = useCallback(async (videoNodeIds: string[]) => {
         if (mergeVideoRunningRef.current) return;
@@ -1427,6 +1469,8 @@ export function useCanvasMediaTools({
         upscalingNodeId,
         scriptNodeToStoryboard,
         scriptToStoryboardNodeId,
+        generateStoryboardRows,
+        generateStoryboardRowsNodeId,
     };
 }
 
