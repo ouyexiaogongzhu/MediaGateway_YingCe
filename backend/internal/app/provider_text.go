@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"infinite-canvas/backend/internal/model"
+	"infinite-canvas/backend/internal/prompts"
 	"infinite-canvas/backend/internal/protocol"
 )
 
@@ -855,7 +856,18 @@ func runChatCompletionsTextTask(ctx context.Context, input canvasGenerationInput
 	// 分鏰操作強制 JSON 輸出：omlx+xgrammar 在 logit 級強制（未裝 xgrammar 時
 	// omlx 自動降級為提示注入，無副作用）
 	if input.Operation == "storyboard" {
-		body["response_format"] = map[string]string{"type": "json_object"}
+		// xgrammar 語法級硬約束：輸出必須符合 storyboard-plan/v3 schema
+		// （無 xgrammar 時 omlx 自動降級為提示注入，無副作用）
+		// #4034：受限生成須關思考，否則 "!" 會污染輸出
+		body["response_format"] = map[string]interface{}{
+			"type": "json_schema",
+			"json_schema": map[string]interface{}{
+				"name":   "storyboard_plan_v3",
+				"strict": true,
+				"schema": json.RawMessage(prompts.StoryboardPlanJSONSchema),
+			},
+		}
+		body["chat_template_kwargs"] = map[string]interface{}{"enable_thinking": false}
 	}
 	applyTextThinking(body, input, "chat-completion")
 	applyTextOutputLimit(body, input.MaxOutputTokens, "max_tokens")
