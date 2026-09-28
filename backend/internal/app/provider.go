@@ -340,7 +340,7 @@ func providerPayloadErrorMessage(raw string) string {
 	return providerErrorWithDetail("模型服务返回失败，请检查请求内容或渠道配置", raw)
 }
 
-func (s *Service) processCanvasGenerationTask(ctx context.Context, userID string, taskProjectID string, taskType string, fallbackPrompt string, rawInput string) (map[string]interface{}, error) {
+func (s *Service) processCanvasGenerationTask(ctx context.Context, userID string, taskProjectID string, taskType string, taskOperation string, fallbackPrompt string, rawInput string) (map[string]interface{}, error) {
 	ctx = withProtocolRegistry(ctx, s.protocolRegistry())
 	var input canvasGenerationInput
 	if err := json.Unmarshal([]byte(rawInput), &input); err != nil {
@@ -354,8 +354,24 @@ func (s *Service) processCanvasGenerationTask(ctx context.Context, userID string
 	}
 	promptTemplateOperation := metadataString(input.Metadata, "promptTemplateOperation")
 	// 视频节点的最终 Prompt 只取输入框内容，不能被分镜模板替换；图片和文本仍沿用模板能力。
+	// 畫布分鏰生成（canvas_text + operation=storyboard）默認套 storyboard_plan 模板+受保護契約：
+	// 裸腳本直進 LLM 會返回散文劇本而非可解析的分鏰行（2026-09-28）。
+	if taskType == "canvas_text" && taskOperation == "storyboard" && promptTemplateOperation == "" {
+		promptTemplateOperation = "storyboard_plan"
+	}
 	if input.Mode != "video" && promptTemplateOperation != "" {
 		values := metadataStringValues(input.Metadata["promptTemplateVariables"])
+		if taskType == "canvas_text" && taskOperation == "storyboard" {
+			if values["剧情"] == "" {
+				values["剧情"] = strings.TrimSpace(input.Prompt)
+			}
+			if values["单镜头时长规则"] == "" {
+				values["单镜头时长规则"] = "单个镜头时长 5–15 秒。"
+			}
+			if values["镜头数量规则"] == "" {
+				values["镜头数量规则"] = "把剧情按时间轴连续切分成镜头，相邻镜头时间区间首尾相接；每个镜头在 shots 数组元素中输出 timeRange 字段（格式「M:SS–M:SS」），shots 数组最多 100 个。"
+			}
+		}
 		compiled, compileErr := s.compilePrompt(userID, promptTemplateOperation, values)
 		if compileErr != nil {
 			return nil, fmt.Errorf("编译用户提示词失败：%w", compileErr)

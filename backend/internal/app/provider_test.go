@@ -2750,7 +2750,7 @@ func TestProcessTaskValidatesInterfaceBeforeHydratingMedia(t *testing.T) {
 		ReferenceImages: []providerMedia{{StorageKey: "resource:missing"}},
 	}
 	raw, _ := json.Marshal(input)
-	_, err := (&Service{}).processCanvasGenerationTask(context.Background(), "user-1", "", "video_generate", "", string(raw))
+	_, err := (&Service{}).processCanvasGenerationTask(context.Background(), "user-1", "", "video_generate", "", "", string(raw))
 	if err == nil || !strings.Contains(err.Error(), "不支持video生成") {
 		t.Fatalf("processCanvasGenerationTask() error = %v", err)
 	}

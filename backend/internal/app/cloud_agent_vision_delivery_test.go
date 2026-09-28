@@ -117,7 +117,7 @@ func TestCloudAgentVisionWorkerSendsPixelsWithoutPublicURL(t *testing.T) {
 			if strings.Contains(string(raw), "base64,") || strings.Contains(string(raw), "signature=") {
 				t.Fatal("persistable task contains pixel bytes or signed URL")
 			}
-			result, err := s.processCanvasGenerationTask(context.Background(), "user", "agent-canvas", "canvas_text", "", string(raw))
+			result, err := s.processCanvasGenerationTask(context.Background(), "user", "agent-canvas", "canvas_text", "", "", string(raw))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -220,7 +220,7 @@ func TestCloudAgentVisionMatchesConnectedTextNode(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				result, err := s.processCanvasGenerationTask(context.Background(), "user", "agent-canvas", "canvas_text", "", string(raw))
+				result, err := s.processCanvasGenerationTask(context.Background(), "user", "agent-canvas", "canvas_text", "", "", string(raw))
 				if err != nil {
 					t.Fatalf("agent=%t: %v", agent, err)
 				}

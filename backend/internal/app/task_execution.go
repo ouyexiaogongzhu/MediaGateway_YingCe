@@ -43,14 +43,14 @@ func (s *Service) processTask(ctx context.Context, task model.Task) (map[string]
 		return s.processStoryboardComposeTask(ctx, task)
 	}
 	if task.Type == "canvas_text" || task.Type == "canvas_image" || task.Type == "canvas_video" || task.Type == "canvas_audio" {
-		result, err := s.processCanvasGenerationTask(ctx, task.UserID, task.ProjectID, task.Type, task.Prompt, task.InputJSON)
+		result, err := s.processCanvasGenerationTask(ctx, task.UserID, task.ProjectID, task.Type, task.Operation, task.Prompt, task.InputJSON)
 		return result, nil, err
 	}
 	if strings.HasPrefix(task.Type, "video_") {
 		if !canRunProviderTask(task) {
 			return nil, nil, errors.New("视频任务缺少可执行的模型配置")
 		}
-		result, err := s.processCanvasGenerationTask(ctx, task.UserID, task.ProjectID, task.Type, task.Prompt, task.InputJSON)
+		result, err := s.processCanvasGenerationTask(ctx, task.UserID, task.ProjectID, task.Type, task.Operation, task.Prompt, task.InputJSON)
 		return result, nil, err
 	}
 	return nil, nil, errors.New("任务类型没有可用的执行分支")
