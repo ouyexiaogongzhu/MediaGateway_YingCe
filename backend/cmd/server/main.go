@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"log"
@@ -10,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -76,6 +79,32 @@ func run(ctx context.Context) error {
 	if err := svc.ValidateRuntime(); err != nil {
 		return err
 	}
+	// 引导管理员必须先于监听端口创建，消除公网部署"首注册者即管理员"的抢占窗口。
+	if userCount, err := repo.UserCount(); err != nil {
+		return err
+	} else if userCount == 0 {
+		adminUsername := strings.TrimSpace(os.Getenv("CANVAS_ADMIN_USERNAME"))
+		if adminUsername == "" {
+			adminUsername = service.DefaultBootstrapAdminUsername
+		}
+		adminPassword := os.Getenv("CANVAS_ADMIN_PASSWORD")
+		if strings.TrimSpace(adminPassword) == "" {
+			buf := make([]byte, 18)
+			if _, err := rand.Read(buf); err != nil {
+				return err
+			}
+			adminPassword = base64.RawURLEncoding.EncodeToString(buf)
+			credentialFile := filepath.Join(dataDir, "bootstrap_admin.txt")
+			if err := os.WriteFile(credentialFile, []byte(fmt.Sprintf("username=%s\npassword=%s\n", adminUsername, adminPassword)), 0o600); err != nil {
+				return err
+			}
+			log.Printf("未配置 CANVAS_ADMIN_PASSWORD：已生成初始管理员凭据并写入 %s，请登录后立即修改密码并删除该文件", credentialFile)
+		}
+		if err := svc.EnsureBootstrapAdmin(adminUsername, adminPassword); err != nil {
+			return err
+		}
+		log.Printf("initial admin account created: %s", adminUsername)
+	}
 	if err := svc.EnsureSystemChannelModels(); err != nil {
 		return err
 	}
@@ -100,6 +129,11 @@ func run(ctx context.Context) error {
 		log.Printf("storage migration completed: tasks=%d assets=%d projects=%d backup=%s", summary.Tasks, summary.Assets, summary.Projects, summary.Backup)
 	}
 	r := gin.New()
+	// 仅信任内网反代：直连 8080 的客户端地址不可信，其 X-Forwarded-For/X-Real-IP
+	// 头会被忽略，防止轮换伪造头击穿所有以 ClientIP 为键的限流与审计。
+	if err := r.SetTrustedProxies([]string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "::1/128", "fc00::/7", "fe80::/10"}); err != nil {
+		return err
+	}
 	r.Use(gin.LoggerWithFormatter(func(param gin.LogFormatterParams) string {
 		return fmt.Sprintf("%s - [%s] \"%s %s\" %d %s %s\n", param.ClientIP, param.TimeStamp.Format(time.RFC3339), param.Method, redactCanvasSharePath(param.Path), param.StatusCode, param.Latency, param.ErrorMessage)
 	}), gin.Recovery())

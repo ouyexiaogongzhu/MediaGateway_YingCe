@@ -129,7 +129,7 @@ print_result() {
     printf '访问地址：http://%s:%s\n' "$local_ip" "$CANVAS_HTTP_PORT"
     printf '安装目录：%s\n' "$INSTALL_DIR"
     printf '查看状态：cd %q && docker compose --env-file .env -f %s -f %s ps\n' "$INSTALL_DIR" "$COMPOSE_FILE" "$BUILD_COMPOSE_FILE"
-    printf '\n首次打开后注册的第一个账号会自动成为管理员。公网长期使用前请配置 HTTPS。\n'
+    printf '\n初始管理员账号已由服务自动创建，随机密码在安装目录 data/bootstrap_admin.txt（登录后请立即改密并删除该文件），也可通过 .env 配置 CANVAS_ADMIN_USERNAME/CANVAS_ADMIN_PASSWORD 指定。公网长期使用前请配置 HTTPS。\n'
 }
 
 main() {

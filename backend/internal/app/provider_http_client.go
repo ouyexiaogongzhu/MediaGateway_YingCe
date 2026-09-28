@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"infinite-canvas/backend/internal/model"
+	"infinite-canvas/backend/internal/outbound"
 	"infinite-canvas/backend/internal/platform"
 )
 
@@ -264,6 +265,15 @@ func doBinaryWithConsumer(req *http.Request, onChunk func(string, []byte)) ([]by
 		defer release()
 	}
 	if _, err := ValidateOutboundURL(req.URL.String()); err != nil {
+		recordProviderRequest(req, startedAt, 0, nil, err)
+		return nil, "", err
+	}
+	// 与浏览器中转（ValidateCustomRelayURL）一致的明文策略：HTTP 上游不允许携带
+	// Authorization 凭据，除非目标是回环地址或部署者已通过
+	// CANVAS_ALLOWED_PRIVATE_UPSTREAM_HOSTS 显式钉住，防止链路 MITM 窃取 API Key 与对话内容。
+	if req.URL.Scheme == "http" && req.Header.Get("Authorization") != "" &&
+		!isLoopbackHTTPBase(req.URL) && !outbound.AllowedPrivateUpstreamHost(req.URL.Hostname()) {
+		err := errors.New("明文 HTTP 上游不允许携带 Authorization 凭据：请改用 HTTPS，或将该主机加入 CANVAS_ALLOWED_PRIVATE_UPSTREAM_HOSTS")
 		recordProviderRequest(req, startedAt, 0, nil, err)
 		return nil, "", err
 	}

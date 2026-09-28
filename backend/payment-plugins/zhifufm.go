@@ -155,20 +155,18 @@ func (p *ZhiFuFMProvider) CreateOrder(ctx context.Context, config Config, reques
 	}, nil
 }
 
+// 支付FM只提供 /startOrder 下单与异步回调，没有可用的服务端查单/关单接口；
+// 此前 QueryOrder 恒回"未支付"、CloseOrder 无条件回"已关闭"，导致回调丢失时
+// 用户已付款的订单被宿主强制关闭、积分永不入账。宁可口头上报不支持，由宿主
+// 保留 pending 等待回调/人工核对，也不能伪造渠道状态。
+var errZhiFuFMQueryUnsupported = &ProviderError{Code: "zhifufm_query_unsupported", Message: "支付FM渠道不支持服务端查单，请以异步回调结果为准", Temporary: true}
+
 func (p *ZhiFuFMProvider) QueryOrder(ctx context.Context, config Config, request QueryRequest) (Result, error) {
-	return Result{
-		MerchantOrderNo: request.MerchantOrderNo,
-		Currency:        "CNY",
-	}, nil
+	return Result{}, errZhiFuFMQueryUnsupported
 }
 
 func (p *ZhiFuFMProvider) CloseOrder(ctx context.Context, config Config, request CloseRequest) (Result, error) {
-	return Result{
-		MerchantOrderNo: request.MerchantOrderNo,
-		Closed:          true,
-		ProviderStatus:  "CLOSED",
-		Currency:        "CNY",
-	}, nil
+	return Result{}, &ProviderError{Code: "zhifufm_close_unsupported", Message: "支付FM渠道不支持服务端关单，订单将保留待支付状态等待异步回调", Temporary: true}
 }
 
 func (p *ZhiFuFMProvider) VerifyNotification(_ context.Context, config Config, headers http.Header, rawBody []byte) (Notification, error) {

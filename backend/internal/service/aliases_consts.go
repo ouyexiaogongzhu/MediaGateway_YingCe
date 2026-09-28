@@ -82,3 +82,6 @@ const (
 	SkillPackageUploadMaxBytes         = app.SkillPackageUploadMaxBytes
 	WorkflowPluginRunningHub           = app.WorkflowPluginRunningHub
 )
+
+// DefaultBootstrapAdminUsername 转发 app 层的引导管理员默认用户名。
+const DefaultBootstrapAdminUsername = app.DefaultBootstrapAdminUsername

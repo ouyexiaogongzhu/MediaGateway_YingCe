@@ -53,13 +53,26 @@ func TestRegisterRequiresAcceptedTermsBeforeWriting(t *testing.T) {
 }
 
 func TestRegisterAcceptedTermsCreatesFirstAdmin(t *testing.T) {
-	svc, _ := newRegistrationTestService(t)
-	result, err := svc.Register(RegisterRequest{Username: "new-user", Password: "password", AcceptedTerms: true})
-	if err != nil {
+	svc, db := newRegistrationTestService(t)
+	// 空库时注册必须被拒绝：管理员只能由 EnsureBootstrapAdmin 引导创建，
+	// 否则公网部署上第一个抢到注册接口的人会无条件获得管理员权限。
+	if _, err := svc.Register(RegisterRequest{Username: "new-user", Password: "password", AcceptedTerms: true}); err == nil {
+		t.Fatal("Register() on empty database should be rejected")
+	}
+	if err := svc.EnsureBootstrapAdmin("admin", "password"); err != nil {
 		t.Fatal(err)
 	}
-	if result.User.Username != "new-user" || result.User.Role != model.UserRoleAdmin || result.Session == "" {
-		t.Fatalf("Register() result = %#v", result)
+	var admin model.User
+	if err := db.First(&admin, "username = ?", "admin").Error; err != nil || admin.Role != model.UserRoleAdmin {
+		t.Fatalf("EnsureBootstrapAdmin() admin = %#v err = %v", admin, err)
+	}
+	// 已有管理员后再次引导是 no-op，不覆盖现有账号。
+	if err := svc.EnsureBootstrapAdmin("admin", "other-password"); err != nil {
+		t.Fatal(err)
+	}
+	var count int64
+	if err := db.Model(&model.User{}).Count(&count).Error; err != nil || count != 1 {
+		t.Fatalf("EnsureBootstrapAdmin() with existing users changed user count: %d err = %v", count, err)
 	}
 }
 
