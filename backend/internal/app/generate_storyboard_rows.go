@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -22,6 +23,100 @@ const StoryboardContractInstruction = `將以下劇本拆解為分鏰行。只�
 
 const storyboardRowsTaskTimeout = 600 * time.Second
 
+// runStoryboardTextTask 是 canvas_text + operation=storyboard 的正文执行包装：
+// 输出抽不出 ≥1 条分镜行时带着错误反馈后缀重试（共 3 次尝试），全部失败才把
+// 散文正文原样透传并打 storyboardParseFailed 标记，供前端提示格式降级。
+func runStoryboardTextTask(ctx context.Context, input canvasGenerationInput) (map[string]interface{}, error) {
+	const maxAttempts = 3
+	basePrompt := input.Prompt
+	for attempt := 1; ; attempt++ {
+		input.Prompt = basePrompt
+		if attempt > 1 {
+			input.Prompt += storyboardRetrySuffix
+		}
+		result, err := runTextTask(ctx, input)
+		if err != nil {
+			return nil, err
+		}
+		text, _ := result["text"].(string)
+		if !shouldRetryStoryboardOutput(text) {
+			return result, nil
+		}
+		if attempt >= maxAttempts {
+			if strings.TrimSpace(text) == "" {
+				return nil, errors.New("文本模型连续三次没有返回正文")
+			}
+			result["storyboardParseFailed"] = true
+			return result, nil
+		}
+	}
+}
+
+// storyboardRetrySuffix 重试时追加的错误反馈，风格与受保护契约一致；逐字使用，勿改。
+const storyboardRetrySuffix = "\n\n【上一次輸出不符合格式】你上次返回了散文而不是 JSON 分鏰行，已被系統拒收。這一次必須只輸出符合 storyboard-plan/v3 Schema 的單個 JSON 對象（{\"shots\":[...]}），第一個字符必須是 {，最後一個字符必須是 }，禁止任何解釋、前言、Markdown 代碼塊或散文。"
+
+// shouldRetryStoryboardOutput 判定模型输出是否缺少可解析的分镜行（true = 需要重试）。
+// 宽松成功标准：正文能抽出 JSON，且为含 ≥1 个元素的 shots/rows 数组的对象，或本身就是
+// ≥1 个元素的裸数组（ScriptToStoryboardText 同样接受裸数组）。
+func shouldRetryStoryboardOutput(text string) bool {
+	jsonText, err := extractPreferredJSONText(text, "shots")
+	if err != nil {
+		jsonText, err = extractJSONText(text)
+		if err != nil {
+			return true
+		}
+	}
+	var plan struct {
+		Shots []json.RawMessage `json:"shots"`
+		Rows  []json.RawMessage `json:"rows"`
+	}
+	if json.Unmarshal([]byte(jsonText), &plan) == nil {
+		if len(plan.Shots) == 0 && len(plan.Rows) == 0 {
+			return true
+		}
+		return !storyboardRowsHaveTimeRange(jsonText)
+	}
+	var rows []json.RawMessage
+	if json.Unmarshal([]byte(jsonText), &rows) == nil {
+		if len(rows) == 0 {
+			return true
+		}
+		return !storyboardRowsHaveTimeRange(jsonText)
+	}
+	return true
+}
+
+// storyboardRowsHaveTimeRange：行陣列中至少一行需帶 timeRange（分鏰行核心欄位）。
+// 缺失 = 結構漂移（如 title/logline 開頭的異形 JSON），觸發帶錯誤反饋的重試。
+func storyboardRowsHaveTimeRange(jsonText string) bool {
+	var withKeys struct {
+		Shots []map[string]any `json:"shots"`
+		Rows  []map[string]any `json:"rows"`
+	}
+	if err := json.Unmarshal([]byte(jsonText), &withKeys); err == nil {
+		for _, row := range withKeys.Shots {
+			if _, ok := row["timeRange"]; ok {
+				return true
+			}
+		}
+		for _, row := range withKeys.Rows {
+			if _, ok := row["timeRange"]; ok {
+				return true
+			}
+		}
+		return false
+	}
+	var rows []map[string]any
+	if json.Unmarshal([]byte(jsonText), &rows) == nil {
+		for _, row := range rows {
+			if _, ok := row["timeRange"]; ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (s *Service) GenerateStoryboardRows(ctx context.Context, userID, canvasID, sourceNodeID, model, logicalModelID string) (map[string]any, error) {
 	script, err := s.scriptNodeContent(userID, canvasID, sourceNodeID)
 	if err != nil {
@@ -31,6 +126,7 @@ func (s *Service) GenerateStoryboardRows(ctx context.Context, userID, canvasID, 
 	task, err := s.CreateTask(userID, CreateTaskRequest{
 		ProjectID:      canvasID,
 		Type:           "canvas_text",
+		Operation:      "storyboard",
 		Prompt:         prompt,
 		Model:          model,
 		LogicalModelID: logicalModelID,

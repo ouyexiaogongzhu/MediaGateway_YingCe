@@ -44,6 +44,7 @@ type canvasGenerationInput struct {
 	ImageCapability  *ImageCapabilityConfig `json:"-"`
 	StreamText       bool                   `json:"-"` // 分镜请求使用上游 SSE 保活；最终结构仍在流结束后统一校验。
 	MaxOutputTokens  int                    `json:"-"`
+	Operation        string                 `json:"-"` // 任务操作（storyboard 等路由到響應格式約束）
 	OnTextDelta      func(string)           `json:"-"`
 	OnReasoningDelta func(string)           `json:"-"`
 	VideoCapability  *VideoCapabilityConfig `json:"-"`
@@ -349,6 +350,7 @@ func (s *Service) processCanvasGenerationTask(ctx context.Context, userID string
 	if strings.TrimSpace(input.Prompt) == "" {
 		input.Prompt = fallbackPrompt
 	}
+	input.Operation = taskOperation
 	if input.Mode == "" && strings.HasPrefix(taskType, "video_") {
 		input.Mode = "video"
 	}
@@ -487,6 +489,11 @@ func (s *Service) processCanvasGenerationTask(ctx context.Context, userID string
 				return nil, err
 			}
 			return runAgentToolTask(ctx, input)
+		}
+		// 畫布分鏰（operation=storyboard）：弱指令模型可能無視契約返回散文，
+		// 後端重試糾偏；三次仍失敗才降級透傳正文並打 storyboardParseFailed 標記。
+		if taskType == "canvas_text" && taskOperation == "storyboard" {
+			return runStoryboardTextTask(ctx, input)
 		}
 		result, taskErr := runTextTask(ctx, input)
 		if taskErr == nil && promptTemplateOperation != "" {

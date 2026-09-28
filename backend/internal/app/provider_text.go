@@ -852,6 +852,11 @@ func runChatCompletionsTextTask(ctx context.Context, input canvasGenerationInput
 	}
 	messages = append(messages, map[string]interface{}{"role": "user", "content": userContent})
 	body := map[string]interface{}{"model": input.Config.Model, "messages": messages}
+	// 分鏰操作強制 JSON 輸出：omlx+xgrammar 在 logit 級強制（未裝 xgrammar 時
+	// omlx 自動降級為提示注入，無副作用）
+	if input.Operation == "storyboard" {
+		body["response_format"] = map[string]string{"type": "json_object"}
+	}
 	applyTextThinking(body, input, "chat-completion")
 	applyTextOutputLimit(body, input.MaxOutputTokens, "max_tokens")
 	result, err := requestTextProvider(ctx, input.Config, "/chat/completions", body, "chat-completion", input.StreamText, input.OnTextDelta)
