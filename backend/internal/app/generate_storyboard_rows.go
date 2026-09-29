@@ -86,21 +86,30 @@ func shouldRetryStoryboardOutput(text string) bool {
 	return true
 }
 
-// storyboardRowsHaveTimeRange：行陣列中至少一行需帶 timeRange（分鏰行核心欄位）。
+// storyboardRowsHaveTimeRange：行陣列中至少一行需帶 timeRange 或 durationSeconds。
+// json_schema 硬約束 required 的是 durationSeconds（無 timeRange），門若只認 timeRange
+// 會永不過、每次燒滿 3 次重試（3× 牆鐘）。兩者任一 = 結構正確。
 // 缺失 = 結構漂移（如 title/logline 開頭的異形 JSON），觸發帶錯誤反饋的重試。
 func storyboardRowsHaveTimeRange(jsonText string) bool {
+	hasCore := func(row map[string]any) bool {
+		if _, ok := row["timeRange"]; ok {
+			return true
+		}
+		_, ok := row["durationSeconds"]
+		return ok
+	}
 	var withKeys struct {
 		Shots []map[string]any `json:"shots"`
 		Rows  []map[string]any `json:"rows"`
 	}
 	if err := json.Unmarshal([]byte(jsonText), &withKeys); err == nil {
 		for _, row := range withKeys.Shots {
-			if _, ok := row["timeRange"]; ok {
+			if hasCore(row) {
 				return true
 			}
 		}
 		for _, row := range withKeys.Rows {
-			if _, ok := row["timeRange"]; ok {
+			if hasCore(row) {
 				return true
 			}
 		}

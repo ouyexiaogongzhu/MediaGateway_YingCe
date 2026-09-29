@@ -32,6 +32,8 @@ func TestShouldRetryStoryboardOutput(t *testing.T) {
 		{"纯散文", "我針對您的優化版進行了微調與細化，劇本如下……", true},
 		{"空输出", "", true},
 		{"shots 对象", oneShot, false},
+		{"durationSeconds 行（schema 硬約束產出）", `{"shots":[{"durationSeconds":5,"action":"开场"}]}`, false},
+		{"混合 duration/timeRange", `[{"durationSeconds":6},{"timeRange":"0:05–0:11"}]`, false},
 		{"散文包裹 shots", "好的，以下是分镜：\n" + oneShot + "\n如需調整請告知。", false},
 		{"rows 键", `{"rows":[{"timeRange":"0:00–0:05"}]}`, false},
 		{"裸数组", `[{"timeRange":"0:00–0:05"}]`, false},
