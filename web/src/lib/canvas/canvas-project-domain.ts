@@ -124,7 +124,13 @@ export function storyboardRowsOutputContract(requirement: string) {
 // 历史模板路径可能直接落 {title, rows}。两种结构都要能解析，内层再做代码块剥离与首尾大括号截取兜底，
 // 模型偶发违反契约（包 ```json 或混入解释文字）时仍能取出分镜表。
 function parseStoryboardRowsPayload(raw: string): { title?: string; rows?: Array<Partial<StoryboardRow>> } {
-    const parsed = JSON.parse(raw) as { title?: string; rows?: Array<Partial<StoryboardRow>>; text?: unknown };
+    // storyboard-plan 契约的 shots 键与旧模板的 rows 键等价（后端 gate 两者同收），这里同样两者都认。
+    const withShotsFallback = (value: { title?: string; rows?: Array<Partial<StoryboardRow>>; shots?: unknown; text?: unknown }) => {
+        if (Array.isArray(value.rows)) return value;
+        if (Array.isArray(value.shots)) return { ...value, rows: value.shots };
+        return value;
+    };
+    const parsed = withShotsFallback(JSON.parse(raw) as { title?: string; rows?: Array<Partial<StoryboardRow>>; shots?: unknown; text?: unknown });
     if (Array.isArray(parsed.rows)) return parsed;
     if (typeof parsed.text === "string" && parsed.text.trim()) {
         const inner = parsed.text.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "");
@@ -132,7 +138,7 @@ function parseStoryboardRowsPayload(raw: string): { title?: string; rows?: Array
         const end = inner.lastIndexOf("}");
         if (start >= 0 && end > start) {
             try {
-                const innerParsed = JSON.parse(inner.slice(start, end + 1)) as { title?: string; rows?: Array<Partial<StoryboardRow>> };
+                const innerParsed = withShotsFallback(JSON.parse(inner.slice(start, end + 1)) as { title?: string; rows?: Array<Partial<StoryboardRow>>; shots?: unknown });
                 if (Array.isArray(innerParsed.rows)) return innerParsed;
             } catch {
                 // 内层不是合法 JSON 时落到外层结构，由调用方的缺行校验统一报错。
