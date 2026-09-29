@@ -18,6 +18,7 @@ import (
 // StoryboardContractInstruction 实证可产出约 23 镜的完整覆盖分镜行；逐字使用，勿改。
 const StoryboardContractInstruction = `將以下劇本拆解為分鏰行。只輸出 JSON 對象（{"shots":[...]}），首字符 { 尾字符 }，禁止任何解釋、前言、Markdown 或散文。
 要求：按時間軸連續切分覆蓋全片（每鏡 5–15 秒），shots 數組完整覆蓋到結尾，不得提前收束。
+輸出必須是最緊湊的單行 JSON：禁止任何縮進空格、換行和多餘空白（欄位間僅用英文逗號分隔）。
 每行欄位：timeRange, shotType, camera, characters, action, dialogue, voiceMode, sfxTags, musicGroupId, visualPrompt, videoPrompt。
 劇本：`
 
@@ -87,7 +88,9 @@ func normalizeStoryboardTaskText(result map[string]interface{}, text string) {
 			continue
 		}
 		row := scriptToStoryboardRow(raw)
-		for _, key := range []string{"sfxTags", "mustHave", "optionalDetails", "voiceMode", "musicGroupId", "musicMood"} {
+		// assetRefs 无法安全映射成前端 StoryboardAssetBinding（{nodeId,role,priority}，
+		// nodeId 需查资产库），以原字段名透传保数据不丢；前端暂不读，映射缺口待补。
+		for _, key := range []string{"sfxTags", "mustHave", "optionalDetails", "voiceMode", "musicGroupId", "musicMood", "assetRefs"} {
 			if _, ok := row[key]; ok {
 				continue
 			}
@@ -99,7 +102,7 @@ func normalizeStoryboardTaskText(result map[string]interface{}, text string) {
 			if value, ok := raw["characters"]; ok && value != nil {
 				row["characters"] = value
 			} else if value, ok := raw["characterIds"]; ok && value != nil {
-				row["characters"] = value
+				row["characters"] = storyboardCharacterRefs(value)
 			}
 		}
 		normalized = append(normalized, row)
@@ -111,6 +114,25 @@ func normalizeStoryboardTaskText(result map[string]interface{}, text string) {
 	if data, err := json.Marshal(out); err == nil {
 		result["text"] = string(data)
 	}
+}
+
+// storyboardCharacterRefs 把模型输出的 characterIds 字符串数组包成前端
+// StoryboardCharacterReference 兼容形状（{"characterName": s}），与前端防御性
+// 映射对齐；已是对象的元素原样保留，非数组输入不动。
+func storyboardCharacterRefs(value any) any {
+	ids, ok := value.([]any)
+	if !ok {
+		return value
+	}
+	refs := make([]any, 0, len(ids))
+	for _, item := range ids {
+		if name, isStr := item.(string); isStr {
+			refs = append(refs, map[string]any{"characterName": name})
+			continue
+		}
+		refs = append(refs, item)
+	}
+	return refs
 }
 
 // shouldRetryStoryboardOutput 判定模型输出是否缺少可解析的分镜行（true = 需要重试）。
