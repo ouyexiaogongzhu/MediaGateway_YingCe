@@ -99,16 +99,25 @@ function scriptAssetHints(scriptText: string, mentionRefs: CanvasResourceReferen
 }
 
 export function autoBindStoryboardRowAssets<T extends { assetBindings?: StoryboardAssetBinding[] }>(
-    rows: T[],
+    inputRows: T[],
     nodes: CanvasNodeData[],
     hints?: StoryboardScriptAssetHints,
 ): T[] {
+    let rows = inputRows;
     const candidates = nodes
         .filter((node) => node.type === CanvasNodeType.Image || node.type === CanvasNodeType.Drawing)
         .map((node) => ({ node, title: (node.title || "").trim().toLowerCase() }))
         .filter((item) => item.title.length >= 1);
     const scriptHints = hints?.scriptText ? scriptAssetHints(hints.scriptText, hints.mentionRefs) : [];
-    if (!candidates.length && !scriptHints.length) return rows;
+    // 模型会把 assetRefs.nodeId 填成 @图片N 提及标签（非真实节点 ID），先剔除死绑定。
+    const knownNodeIds = new Set(nodes.map((node) => node.id));
+    const cleaned = rows.map((row) => {
+        const bindings = row.assetBindings || [];
+        if (bindings.every((binding) => knownNodeIds.has(binding.nodeId))) return row;
+        return { ...row, assetBindings: bindings.filter((binding) => knownNodeIds.has(binding.nodeId)) };
+    });
+    if (!candidates.length && !scriptHints.length) return cleaned;
+    rows = cleaned;
     const characterName = (value: unknown): string => {
         if (typeof value === "string") return value.trim().toLowerCase();
         if (value && typeof value === "object") {
