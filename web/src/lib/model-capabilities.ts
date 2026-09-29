@@ -996,7 +996,7 @@ export function normalizeImageSizeSetting(profile: ImageCapabilityConfig, value?
     const candidate = raw || profile.size.default;
     if (profile.size.allowCustom || profile.size.values.includes(candidate)) return candidate;
     // 比例请求（"16:9"）不是声明值，过去同样整个掉回 size.default——qwen-image-2.1 的
-    // default 是 1024x1024，恰好落在上面的死锁区间，等于选了比例也没用。
+    // default 恰好落在上面的死锁区间，等于选了比例也没用。降档而不是照单全收。
     if (candidate.includes(":")) return draftSizeForRatio(profile, candidate) || "auto";
     return profile.size.default || profile.size.values[0] || "auto";
 }
