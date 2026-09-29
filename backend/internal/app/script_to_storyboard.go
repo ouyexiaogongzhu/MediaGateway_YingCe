@@ -132,6 +132,9 @@ func parseScriptStoryboardRows(text string) ([]map[string]any, int, error) {
 		raw = value
 	case map[string]any:
 		raw, _ = value["shots"].([]any)
+		if len(raw) == 0 {
+			raw, _ = value["rows"].([]any)
+		}
 	}
 	if len(raw) == 0 {
 		return nil, 0, fmt.Errorf("脚本内容里没有 shots 分镜行")

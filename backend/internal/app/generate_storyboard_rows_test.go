@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -48,5 +49,45 @@ func TestShouldRetryStoryboardOutput(t *testing.T) {
 	}
 	if !strings.Contains(storyboardRetrySuffix, "storyboard-plan/v3") || !strings.Contains(storyboardRetrySuffix, "第一個字符必須是 {") {
 		t.Fatalf("重试后缀缺少关键格式要求：%s", storyboardRetrySuffix)
+	}
+}
+
+func TestNormalizeStoryboardTaskText(t *testing.T) {
+	result := map[string]interface{}{"mode": "text", "text": `{"title":"hotel","logline":"x","shots":[{"description":"A壓住B","videoPrompt":"緩推","visualPrompt":"床沿","shotType":"中景","characterIds":["A","B"],"durationSeconds":10,"sfxTags":["breath"]}]}`}
+	normalizeStoryboardTaskText(result, result["text"].(string))
+	var out struct {
+		Title string           `json:"title"`
+		Rows  []map[string]any `json:"rows"`
+	}
+	if err := json.Unmarshal([]byte(result["text"].(string)), &out); err != nil {
+		t.Fatalf("歸一產物不是合法 JSON: %v", err)
+	}
+	if out.Title != "hotel" || len(out.Rows) != 1 {
+		t.Fatalf("title=%q rows=%d", out.Title, len(out.Rows))
+	}
+	row := out.Rows[0]
+	for _, check := range [][3]string{
+		{"plotDescription", "A壓住B", "description 別名"},
+		{"videoMotionPrompt", "緩推", "videoPrompt 別名"},
+		{"imageGenerationPrompt", "床沿", "visualPrompt 別名"},
+		{"shotSize", "中景", "shotType 別名"},
+		{"characters", "", "characterIds→characters"},
+	} {
+		value := row[check[0]]
+		if check[1] == "" {
+			if value == nil {
+				t.Fatalf("%s 應存在（%s）", check[0], check[2])
+			}
+			continue
+		}
+		if value != check[1] {
+			t.Fatalf("%s = %v, 期望 %v（%s）", check[0], value, check[1], check[2])
+		}
+	}
+	if len(row["characters"].([]any)) != 2 {
+		t.Fatalf("characters 綁定失敗: %v", row["characters"])
+	}
+	if _, ok := row["sfxTags"]; !ok {
+		t.Fatal("sfxTags 透傳失敗")
 	}
 }

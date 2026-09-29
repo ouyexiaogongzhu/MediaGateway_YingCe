@@ -40,6 +40,7 @@ func runStoryboardTextTask(ctx context.Context, input canvasGenerationInput) (ma
 		}
 		text, _ := result["text"].(string)
 		if !shouldRetryStoryboardOutput(text) {
+			normalizeStoryboardTaskText(result, text)
 			return result, nil
 		}
 		if attempt >= maxAttempts {
@@ -54,6 +55,63 @@ func runStoryboardTextTask(ctx context.Context, input canvasGenerationInput) (ma
 
 // storyboardRetrySuffix 重试时追加的错误反馈，风格与受保护契约一致；逐字使用，勿改。
 const storyboardRetrySuffix = "\n\n【上一次輸出不符合格式】你上次返回了散文而不是 JSON 分鏰行，已被系統拒收。這一次必須只輸出符合 storyboard-plan/v3 Schema 的單個 JSON 對象（{\"shots\":[...]}），第一個字符必須是 {，最後一個字符必須是 }，禁止任何解釋、前言、Markdown 代碼塊或散文。"
+
+// normalizeStoryboardTaskText 把模型侧 storyboard-plan 输出（shots/description/videoPrompt/
+// characterIds/shotType…）原地归一成前端 storyboardRowsFromTask 消费的形状
+// （rows/plotDescription/videoMotionPrompt/characters…），复用 scriptToStoryboardRow 别名表。
+// 画布分镜原生流在浏览器端解析任务正文，此前只认 rows 键且无别名映射，
+// 导致「視頻提示詞全是空的」「鏡頭沒有關聯資產（characters 丢失）」。
+// 归一失败时保留原文不动（前端已兼容 shots 键，双保险）。
+func normalizeStoryboardTaskText(result map[string]interface{}, text string) {
+	jsonText, err := extractPreferredJSONText(text, "shots")
+	if err != nil {
+		if jsonText, err = extractJSONText(text); err != nil {
+			return
+		}
+	}
+	var plan struct {
+		Title string           `json:"title"`
+		Shots []map[string]any `json:"shots"`
+		Rows  []map[string]any `json:"rows"`
+	}
+	if json.Unmarshal([]byte(jsonText), &plan) != nil || len(plan.Shots)+len(plan.Rows) == 0 {
+		return
+	}
+	rows := plan.Shots
+	if len(rows) == 0 {
+		rows = plan.Rows
+	}
+	normalized := make([]map[string]any, 0, len(rows))
+	for _, raw := range rows {
+		if raw == nil {
+			continue
+		}
+		row := scriptToStoryboardRow(raw)
+		for _, key := range []string{"sfxTags", "mustHave", "optionalDetails", "voiceMode", "musicGroupId", "musicMood"} {
+			if _, ok := row[key]; ok {
+				continue
+			}
+			if value, ok := raw[key]; ok && value != nil {
+				row[key] = value
+			}
+		}
+		if _, ok := row["characters"]; !ok {
+			if value, ok := raw["characters"]; ok && value != nil {
+				row["characters"] = value
+			} else if value, ok := raw["characterIds"]; ok && value != nil {
+				row["characters"] = value
+			}
+		}
+		normalized = append(normalized, row)
+	}
+	out := map[string]any{"rows": normalized}
+	if strings.TrimSpace(plan.Title) != "" {
+		out["title"] = plan.Title
+	}
+	if data, err := json.Marshal(out); err == nil {
+		result["text"] = string(data)
+	}
+}
 
 // shouldRetryStoryboardOutput 判定模型输出是否缺少可解析的分镜行（true = 需要重试）。
 // 宽松成功标准：正文能抽出 JSON，且为含 ≥1 个元素的 shots/rows 数组的对象，或本身就是
