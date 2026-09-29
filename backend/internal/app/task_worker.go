@@ -15,6 +15,15 @@ import (
 
 const newAPIChannel2TaskSyncMaxAge = 5 * time.Minute
 
+// storyboardSyncMaxAge：分鏰行生成（xgrammar 語法約束解碼）遠慢於一般 chat，
+// 同步等待上限單獨放行；其他 newapi 同步任務維持 5 分鐘保護。
+func newAPIChannel2TaskSyncMaxAgeFor(task model.Task) time.Duration {
+	if task.Type == "canvas_text" && task.Operation == "storyboard" {
+		return 35 * time.Minute
+	}
+	return newAPIChannel2TaskSyncMaxAge
+}
+
 // taskWorkerCoordinator 收敛任务领取、租约维护和执行结果落库，避免 Service 同时承担 worker 生命周期与业务命令。
 type taskWorkerCoordinator struct {
 	service *Service
@@ -400,7 +409,7 @@ func newAPIChannel2TaskSyncExpired(task model.Task, err error, now time.Time) bo
 	if task.StartedAt == nil {
 		return true
 	}
-	return !now.Before(task.StartedAt.Add(newAPIChannel2TaskSyncMaxAge))
+	return !now.Before(task.StartedAt.Add(newAPIChannel2TaskSyncMaxAgeFor(task)))
 }
 
 func taskTimeoutMessage(taskType string) string {
