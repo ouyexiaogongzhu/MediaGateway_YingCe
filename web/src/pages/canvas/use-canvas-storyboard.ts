@@ -19,7 +19,7 @@ import {
     storyboardPromptTemplateMetadata,
 } from "@/lib/canvas/canvas-project-domain";
 import { buildNodeMentionReferences } from "@/lib/canvas/canvas-resource-references";
-import { buildStoryboardAssetCatalog } from "@/lib/canvas/canvas-storyboard-assets";
+import { autoBindStoryboardRowAssets, buildStoryboardAssetCatalog } from "@/lib/canvas/canvas-storyboard-assets";
 import { resolveStoryboardGenerationContext } from "@/lib/canvas/canvas-storyboard-context";
 import { reconcileStoryboardTargetConnections, storyboardComposerContent, storyboardRowReferenceNodeIds } from "@/lib/canvas/canvas-storyboard-materializer";
 import { generationErrorMessage } from "@/lib/generation-error";
@@ -226,8 +226,9 @@ export function useCanvasStoryboard({
                 onTaskUpdate: (next) => { if (!signal.aborted && scope === getActiveUserScope()) setNodes((current) => current.map((node) => node.id === nodeId ? { ...node, metadata: { ...node.metadata, ...generationTaskMetadata(next), status: NODE_STATUS_LOADING } } : node)); },
             });
             const result = storyboardRowsFromTask(completed);
+            const boundRows = autoBindStoryboardRowAssets(result.rows, nodesRef.current);
             assertCurrent();
-            replaceScriptRows(nodeId, result.rows);
+            replaceScriptRows(nodeId, boundRows);
             setNodes((current) => current.map((node) => node.id === nodeId ? {
                 ...node,
                 title: result.title || node.title,
@@ -237,7 +238,7 @@ export function useCanvasStoryboard({
                     errorDetails: undefined,
                     ...generationTaskMetadata(completed),
                     storyboard: {
-                        rows: result.rows,
+                        rows: boundRows,
                         visibleColumns: cinematicStoryboardColumns(node.metadata?.storyboard?.visibleColumns),
                         referenceNodeIds: node.metadata?.storyboard?.referenceNodeIds || [],
                     },
