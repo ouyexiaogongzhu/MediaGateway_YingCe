@@ -18,7 +18,6 @@ import (
 // StoryboardContractInstruction 实证可产出约 23 镜的完整覆盖分镜行；逐字使用，勿改。
 const StoryboardContractInstruction = `將以下劇本拆解為分鏰行。只輸出 JSON 對象（{"shots":[...]}），首字符 { 尾字符 }，禁止任何解釋、前言、Markdown 或散文。
 要求：按時間軸連續切分覆蓋全片（每鏡 5–15 秒），shots 數組完整覆蓋到結尾，不得提前收束。
-輸出必須是最緊湊的單行 JSON：禁止任何縮進空格、換行和多餘空白（欄位間僅用英文逗號分隔）。
 每行欄位：timeRange, shotType, camera, characters, action, dialogue, voiceMode, sfxTags, musicGroupId, visualPrompt, videoPrompt。
 劇本：`
 

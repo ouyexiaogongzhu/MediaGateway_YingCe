@@ -357,7 +357,6 @@ func StoryboardExecutionContract(durationRule string, countRule string) string {
 - characterIds 优先填写当前角色版本中的 assetId；角色只有名称、尚未确认资产时填写角色名称，服务端会保留名称引用。不要编造 ID；没有角色时返回空数组。
 - assetRefs 只能引用当前画布资产中的 nodeId；不要根据相似名称编造 ID。每镜最多 6 个，priority 越大表示越重要。
 - styleGuide 最多 120 个中文字符；visualPrompt 只描述首帧，videoPrompt 只描述运动和结尾状态。
-- 输出必须是最紧凑的单行 JSON：禁止任何缩进空格、换行和多余空白（字段间仅用英文逗号分隔）。缩进会按 token 计费且毫无信息量。
 - 画幅比例由视频节点参数控制，提示词不得写入具体比例，也不要讨论画幅配置。
 - 只返回完整 JSON，不要 Markdown 或解释。
 - ` + promptOutputContract(OperationStoryboardPlan)
