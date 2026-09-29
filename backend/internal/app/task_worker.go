@@ -354,6 +354,11 @@ func taskExecutionTimeout(task *model.Task, policy RuntimeTaskPolicy) time.Durat
 	if task == nil {
 		return time.Duration(policy.DefaultTimeoutMinutes) * time.Minute
 	}
+	// 分鏰行生成走 xgrammar 语法级约束解码，27B 上远慢于普通 chat（实测 8 分钟切不完
+	// 一个 4 场剧本），与 newAPIChannel2TaskSyncMaxAgeFor 的 35 分钟同口径放行。
+	if task.Type == "canvas_text" && task.Operation == "storyboard" {
+		return max(time.Duration(policy.TextTimeoutMinutes)*time.Minute, 35*time.Minute)
+	}
 	return taskExecutionTimeoutWithPolicy(task.Type, policy)
 }
 

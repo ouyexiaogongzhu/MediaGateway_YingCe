@@ -301,3 +301,23 @@ func TestAgentExecutionDeadlineCountsAsTaskFailure(t *testing.T) {
 		t.Fatal("到期后 ctx 必须报告 DeadlineExceeded（worker 据此区分租约丢失）")
 	}
 }
+
+func TestTaskExecutionTimeoutStoryboardRowsExtension(t *testing.T) {
+	policy := defaultRuntimePolicy().Task
+	policy.TextTimeoutMinutes = 8
+	rows := &model.Task{Type: "canvas_text", Operation: "storyboard"}
+	if got := taskExecutionTimeout(rows, policy); got != 35*time.Minute {
+		t.Fatalf("storyboard rows timeout = %s, want 35m", got)
+	}
+	// 管理员调大文本超时时以更大者为准。
+	policy.TextTimeoutMinutes = 40
+	if got := taskExecutionTimeout(rows, policy); got != 40*time.Minute {
+		t.Fatalf("storyboard rows timeout = %s, want 40m", got)
+	}
+	// 其他 canvas_text 操作不受影响。
+	plain := &model.Task{Type: "canvas_text", Operation: "canvas_text_generate"}
+	policy.TextTimeoutMinutes = 8
+	if got := taskExecutionTimeout(plain, policy); got != 8*time.Minute {
+		t.Fatalf("plain text timeout = %s, want 8m", got)
+	}
+}
