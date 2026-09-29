@@ -15,16 +15,68 @@ func extractJSONText(raw string) (string, error) {
 			continue
 		}
 		end := jsonValueEnd(raw, start)
-		if end < start {
-			continue
+		candidate := raw[start:]
+		if end >= start {
+			candidate = raw[start : end+1]
 		}
-		candidate := raw[start : end+1]
 		var decoded interface{}
 		if json.Unmarshal([]byte(candidate), &decoded) == nil {
 			return candidate, nil
 		}
+		if repaired, ok := balanceJSONClosers(candidate); ok && json.Unmarshal([]byte(repaired), &decoded) == nil {
+			return repaired, nil
+		}
 	}
 	return "", errors.New("模型返回的不是 JSON")
+}
+
+// balanceJSONClosers 为缺尾部闭合符的 JSON 补齐 ]/}（长输出常见病：模型掉最后一个
+// 根闭合符——实锤案例 22 链分镜输出缺收尾 }，finish_reason=stop，6 分钟产出因
+// 解析失败整轮重试）。字符串未闭合（真截断）或括交错时不修复，保持原样拒绝。
+func balanceJSONClosers(candidate string) (string, bool) {
+	stack := make([]byte, 0, 16)
+	inString := false
+	escaped := false
+	for i := 0; i < len(candidate); i++ {
+		c := candidate[i]
+		if inString {
+			if escaped {
+				escaped = false
+			} else if c == '\\' {
+				escaped = true
+			} else if c == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inString = true
+		case '{', '[':
+			stack = append(stack, c)
+		case '}', ']':
+			if len(stack) == 0 {
+				return candidate, false
+			}
+			opener := stack[len(stack)-1]
+			if (c == '}' && opener != '{') || (c == ']' && opener != '[') {
+				return candidate, false
+			}
+			stack = stack[:len(stack)-1]
+		}
+	}
+	if inString || len(stack) == 0 {
+		return candidate, false
+	}
+	repaired := candidate
+	for i := len(stack) - 1; i >= 0; i-- {
+		if stack[i] == '{' {
+			repaired += "}"
+		} else {
+			repaired += "]"
+		}
+	}
+	return repaired, true
 }
 
 // ExtractJSONText 从模型正文中抽出第一个完整 JSON 值。
@@ -48,13 +100,17 @@ func extractPreferredJSONText(raw string, preferKey string) (string, error) {
 			continue
 		}
 		end := jsonValueEnd(raw, start)
-		if end < start {
-			continue
+		candidate := raw[start:]
+		if end >= start {
+			candidate = raw[start : end+1]
 		}
-		candidate := raw[start : end+1]
 		var decoded interface{}
 		if json.Unmarshal([]byte(candidate), &decoded) != nil {
-			continue
+			repaired, ok := balanceJSONClosers(candidate)
+			if !ok || json.Unmarshal([]byte(repaired), &decoded) != nil {
+				continue
+			}
+			candidate = repaired
 		}
 		if obj, ok := decoded.(map[string]interface{}); ok {
 			if _, ok := obj[preferKey]; ok {
