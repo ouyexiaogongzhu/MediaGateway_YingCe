@@ -226,7 +226,10 @@ export function useCanvasStoryboard({
                 onTaskUpdate: (next) => { if (!signal.aborted && scope === getActiveUserScope()) setNodes((current) => current.map((node) => node.id === nodeId ? { ...node, metadata: { ...node.metadata, ...generationTaskMetadata(next), status: NODE_STATUS_LOADING } } : node)); },
             });
             const result = storyboardRowsFromTask(completed);
-            const boundRows = autoBindStoryboardRowAssets(result.rows, nodesRef.current);
+            const boundRows = autoBindStoryboardRowAssets(result.rows, nodesRef.current, {
+                scriptText: scriptNode.metadata?.content || scriptNode.metadata?.composerContent || "",
+                mentionRefs: buildNodeMentionReferences(scriptNode, nodesRef.current, connectionsRef.current),
+            });
             assertCurrent();
             replaceScriptRows(nodeId, boundRows);
             setNodes((current) => current.map((node) => node.id === nodeId ? {
