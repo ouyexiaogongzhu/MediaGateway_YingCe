@@ -371,7 +371,9 @@ func (s *Service) processCanvasGenerationTask(ctx context.Context, userID string
 				values["单镜头时长规则"] = "单个镜头时长 5–15 秒。"
 			}
 			if values["镜头数量规则"] == "" {
-				values["镜头数量规则"] = "把剧情按时间轴连续切分成镜头，相邻镜头时间区间首尾相接；每个镜头在 shots 数组元素中输出 timeRange 字段（格式「M:SS–M:SS」），shots 数组最多 100 个。"
+				// 密度下限：单镜上限 15 秒 ⇒ 最少镜头数 = 总时长/15 向上取整。
+				// 无此句模型会偷懒合并长镜头（实测 213s 剧情只切 8 行，均 27s/行）。
+				values["镜头数量规则"] = "把剧情按时间轴连续切分成镜头，相邻镜头时间区间首尾相接；每个镜头在 shots 数组元素中输出 timeRange 字段（格式「M:SS–M:SS」），shots 数组最多 100 个。先估算剧情总时长：最少镜头数 = 总时长秒数 ÷ 15 向上取整，行数不得低于该下限，单个镜头时长不得超过 15 秒。"
 			}
 		}
 		compiled, compileErr := s.compilePrompt(userID, promptTemplateOperation, values)
