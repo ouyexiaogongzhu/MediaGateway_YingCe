@@ -1,5 +1,6 @@
 import type { ModelProtocol, ModelProtocolWorkflow } from "@/lib/model-protocols";
 import type { ImageResolutionOption, ImageResolutionTier } from "@/lib/image-resolution-tiers";
+import { buildImageResolutionOptions } from "@/lib/image-resolution-tiers";
 
 export type ModelCapabilityConfig = {
     version: number;
@@ -969,10 +970,34 @@ function imagePresetTierForSelection(profile: ImageCapabilityConfig, size: strin
     return profile.size.presets?.find((preset) => preset.ratio === size)?.tier;
 }
 
+// 草稿档像素上限。sd.cpp 在 48GB 统一内存的 Mac 上超过 ~600K px 会死锁
+// （实测 576x1024 = 590K → 386s 正常；1024x1024 = 1.05M → 卡死在 step 3/20、
+// CPU 0.7%、swap 打满，永不返回）。比例请求取该比例下不超此上限的最大声明值。
+const DRAFT_IMAGE_MAX_PIXELS = 450_000;
+
+function draftSizeForRatio(profile: ImageCapabilityConfig, ratio: string): string | undefined {
+    const declared = buildImageResolutionOptions(profile.size.values);
+    const wanted = ratio.trim().toLowerCase();
+    // 比例未声明时不猜画幅，退回全部声明值里最大的安全档——总比回 size.default
+    // 撞死锁区间强。
+    const pool = declared.filter((option) => option.ratio === wanted);
+    const candidates = (pool.length ? pool : declared)
+        .sort((left, right) => right.width * right.height - left.width * left.height);
+    return candidates.find((option) => option.width * option.height <= DRAFT_IMAGE_MAX_PIXELS)?.size
+        || candidates[candidates.length - 1]?.size;  // 全部超上限：取最小的那张
+}
+
 export function normalizeImageSizeSetting(profile: ImageCapabilityConfig, value?: string) {
     if (profile.size.parameter === "none") return "auto";
-    const candidate = value?.trim() || profile.size.default;
+    const raw = value?.trim();
+    // auto 是「不传尺寸」，下游 imageSizeRequest 见到它就返回 undefined。模型没声明
+    // auto 时过去会改写成 size.default，等于把用户没要的尺寸替他选了。
+    if (raw === "auto") return "auto";
+    const candidate = raw || profile.size.default;
     if (profile.size.allowCustom || profile.size.values.includes(candidate)) return candidate;
+    // 比例请求（"16:9"）不是声明值，过去同样整个掉回 size.default——qwen-image-2.1 的
+    // default 是 1024x1024，恰好落在上面的死锁区间，等于选了比例也没用。
+    if (candidate.includes(":")) return draftSizeForRatio(profile, candidate) || "auto";
     return profile.size.default || profile.size.values[0] || "auto";
 }
 
