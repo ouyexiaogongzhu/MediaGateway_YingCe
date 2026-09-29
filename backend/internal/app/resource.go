@@ -90,9 +90,32 @@ func (s *Service) publicResourceBaseURL() (*url.URL, error) {
 	}
 	raw := firstNonEmpty(setting.PublicBaseURL, os.Getenv("CANVAS_PUBLIC_BASE_URL"))
 	if raw == "" {
-		return nil, BadAuthRequest("服务器本地存储尚未配置服务器访问地址，请设置 CANVAS_PUBLIC_BASE_URL 或在存储设置中配置公网访问地址（或改用 OSS 存储）")
+		// 本地單機部署缺省：參考素材 URL 只會被本機生成面（Gateway）抓取，
+		// 落到本機監聽地址即是正確答案，不再強制要求配置公網地址。
+		raw = localResourceBaseURL()
+		if raw == "" {
+			return nil, BadAuthRequest("服务器本地存储尚未配置服务器访问地址，请设置 CANVAS_PUBLIC_BASE_URL 或在存储设置中配置公网访问地址（或改用 OSS 存储）")
+		}
 	}
 	return validatePublicResourceBaseURL(raw)
+}
+
+// localResourceBaseURL 從 CANVAS_BACKEND_ADDR（缺省 127.0.0.1:8090）推導本機自引用地址。
+func localResourceBaseURL() string {
+	addr := strings.TrimSpace(os.Getenv("CANVAS_BACKEND_ADDR"))
+	if addr == "" {
+		addr = "127.0.0.1:8090"
+	}
+	if strings.HasPrefix(addr, ":") {
+		addr = "127.0.0.1" + addr
+	}
+	if strings.HasPrefix(addr, "0.0.0.0:") {
+		addr = "127.0.0.1" + strings.TrimPrefix(addr, "0.0.0.0")
+	}
+	if !strings.Contains(addr, "://") {
+		addr = "http://" + addr
+	}
+	return strings.TrimRight(addr, "/")
 }
 
 func validatePublicResourceBaseURL(raw string) (*url.URL, error) {
