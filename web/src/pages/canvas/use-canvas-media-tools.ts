@@ -666,7 +666,7 @@ export function useCanvasMediaTools({
                 sourceNodeId: node.id,
                 model: generationConfig.model,
                 ...(logicalModelId ? { logicalModelId } : {}),
-            }, { timeout: 600_000 }));
+            }, { timeout: 1_800_000 }));
             progress.update("刷新画布数据", 90);
             await reloadLatestCanvasProject();
             const selection = new Set([result.nodeId]);

@@ -21,7 +21,7 @@ const StoryboardContractInstruction = `將以下劇本拆解為分鏰行。只�
 每行欄位：timeRange, shotType, camera, characters, action, dialogue, voiceMode, sfxTags, musicGroupId, visualPrompt, videoPrompt。
 劇本：`
 
-const storyboardRowsTaskTimeout = 600 * time.Second
+const storyboardRowsTaskTimeout = 1800 * time.Second
 
 // runStoryboardTextTask 是 canvas_text + operation=storyboard 的正文执行包装：
 // 输出抽不出 ≥1 条分镜行时带着错误反馈后缀重试（共 3 次尝试），全部失败才把
