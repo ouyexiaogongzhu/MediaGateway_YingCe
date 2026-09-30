@@ -23,10 +23,15 @@ export function storyboardRowReferenceNodeIds(
     const scriptReferenceNodeIds = rowCharacterBindings.length
         ? []
         : (scriptNode.metadata?.storyboard?.referenceNodeIds || []);
+    // 插入顺序即优先级：角色 → 場景/定妆 → 道具等 → 手动连线。超出模型参考图上限
+    // 时按此顺序截尾，先丢道具参考，不会砍到角色一致性。
+    const bindings = row.assetBindings || [];
     const referenceIds = new Set([
-        ...scriptReferenceNodeIds,
-        ...(row.assetBindings || []).map((binding) => binding.nodeId),
         ...characterNodeIds,
+        ...rowCharacterBindings.map((binding) => binding.nodeId),
+        ...scriptReferenceNodeIds,
+        ...bindings.filter((binding) => binding.nodeId && binding.role === "environment").map((binding) => binding.nodeId),
+        ...bindings.filter((binding) => binding.nodeId && binding.role !== "character" && binding.role !== "environment").map((binding) => binding.nodeId),
         ...connections.filter((connection) => connection.toNodeId === scriptNode.id && connection.toHandleId === `row:${row.id}`).map((connection) => connection.fromNodeId),
         ...(targetNodeId ? connections.filter((connection) => !connection.relation && connection.toNodeId === targetNodeId).map((connection) => connection.fromNodeId) : []),
         ...(includeFirstFrame && row.imageNodeId ? [row.imageNodeId] : []),
