@@ -609,6 +609,13 @@ func (s *Service) applyGenerationStyleProfile(userID string, taskProjectID strin
 	// 因此后端必须以最终模型重新编译，不能要求用户手动“刷新配置”来同步内部路由。
 	plan, _ := decodeStyleExecutionPlan(input.Metadata["styleExecutionPlan"])
 	stylePrompt, expectedStatus, warnings := resolveGenerationStyleExecution(profile, input.Config.Model, firstNonEmpty(input.Config.InterfaceType, input.Config.APIFormat))
+	// 定妆参考图常是多格角色表（特写/正面/侧面/背面），模型会把拼贴版式复刻进生成
+	// 结果——分镜图必须单帧。放在 style 块之前：reconcileGenerationStylePrompt 按
+	// 后缀管理画风块，guard 混进后缀会破坏重生成时的去重。
+	guard := "【单帧输出】单幅电影画面，禁止拼贴、分格、多联画或角色设定表版式；不得复制参考图中的网格、文字与排版；多角色同框时各自完整独立，不得融合叠加。"
+	if !strings.Contains(input.Prompt, guard) {
+		input.Prompt = strings.TrimSpace(input.Prompt + "\n\n" + guard)
+	}
 	input.Prompt = reconcileGenerationStylePrompt(input.Prompt, plan.Prompt, stylePrompt)
 	if expectedStatus == "blocked" {
 		return fmt.Errorf("当前图片模型无法完整执行项目画风：%s。请切换图片模型，或在项目设置中停用对应画风资产", strings.Join(warnings, "；"))
