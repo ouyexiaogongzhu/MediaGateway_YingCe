@@ -102,7 +102,10 @@ func ResolveAccess(resource *model.Resource, setting storage.Settings, options A
 	if resource.Status != model.ResourceStatusReady {
 		return nil, AccessError(http.StatusConflict, "resource_not_ready", "资源尚未上传完成")
 	}
-	ttl := 5 * time.Minute
+	// 資產庫/創作頁的縮略圖與點開大圖都用這個簽名 URL。5 分鐘的 TTL 下，頁面開
+	// 一會兒縮圖就只能靠瀏覽器緩存，點擊重新請求即 403——用戶看到「縮圖在、點開裂」。
+	// 對登入場景 7 天的暴露窗口可接受；provider 取圖保持 4 小時。
+	ttl := 7 * 24 * time.Hour
 	if options.Purpose == PurposeProvider {
 		ttl = 4 * time.Hour
 	}
