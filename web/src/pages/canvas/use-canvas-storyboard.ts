@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, type Dispatch, type SetStateAction } from "react";
-import { App } from "antd";
+import { createElement, useCallback, useEffect, useRef, type Dispatch, type SetStateAction } from "react";
+import { App, Select } from "antd";
 import { nanoid } from "nanoid";
 
 import { NODE_DEFAULT_SIZE } from "@/constant/canvas";
@@ -267,7 +267,7 @@ export function useCanvasStoryboard({
         }
     }, [addedSkills, confirmGenerationSubmission, connectionsRef, effectiveConfig, isAiConfigReady, message, modal, nodesRef, projectId, replaceScriptRows, setNodes]);
 
-    const ensureScriptImageNodes = useCallback((nodeId: string, rowIds: string[]) => {
+    const ensureScriptImageNodes = useCallback((nodeId: string, rowIds: string[], model?: string) => {
         const scriptNode = nodesRef.current.find((node) => node.id === nodeId && node.type === CanvasNodeType.Script);
         const rows = (scriptNode?.metadata?.storyboard?.rows || []).filter((row) => rowIds.includes(row.id));
         if (!scriptNode || !rows.length) return [];
@@ -287,8 +287,8 @@ export function useCanvasStoryboard({
             const referenceIds = storyboardRowReferenceNodeIds(scriptNode, row, nextNodes, nextConnections, false, existing?.id);
             const composerContent = storyboardComposerContent(prompt, referenceIds, nextNodes);
             const imageNode = existing
-                ? { ...existing, metadata: { ...existingMetadata, size: existingMetadata.size || draftSize, prompt, composerContent, ...storyboardPromptTemplateMetadata(row, "image"), workflowKind: "shot" as const, workflowTitle: `镜头 ${row.shotNumber} 分镜图`, shotIndex: row.shotNumber } }
-                : createCanvasNode(CanvasNodeType.Image, { x: startX + imageSpec.width / 2, y: scriptNode.position.y + index * (imageSpec.height + 36) + imageSpec.height / 2 }, { prompt, composerContent, size: draftSize, ...storyboardPromptTemplateMetadata(row, "image"), workflowKind: "shot", workflowTitle: `镜头 ${row.shotNumber} 分镜图`, shotIndex: row.shotNumber, status: NODE_STATUS_IDLE });
+                ? { ...existing, metadata: { ...existingMetadata, size: existingMetadata.size || draftSize, ...(model ? { model } : {}), prompt, composerContent, ...storyboardPromptTemplateMetadata(row, "image"), workflowKind: "shot" as const, workflowTitle: `镜头 ${row.shotNumber} 分镜图`, shotIndex: row.shotNumber } }
+                : createCanvasNode(CanvasNodeType.Image, { x: startX + imageSpec.width / 2, y: scriptNode.position.y + index * (imageSpec.height + 36) + imageSpec.height / 2 }, { prompt, composerContent, size: draftSize, ...(model ? { model } : {}), ...storyboardPromptTemplateMetadata(row, "image"), workflowKind: "shot", workflowTitle: `镜头 ${row.shotNumber} 分镜图`, shotIndex: row.shotNumber, status: NODE_STATUS_IDLE });
             if (!existing) {
                 imageNode.title = `镜头 ${row.shotNumber} · 分镜图`;
                 nextNodes.push(imageNode);
@@ -374,8 +374,33 @@ export function useCanvasStoryboard({
             setNodes(cleared);
             targetRows.push(...redoRows);
         }
-        if (!await confirmGenerationSubmission(targetRows.length, imageModel, "图片生成")) return;
-        const targets = ensureScriptImageNodes(nodeId, targetRows.map((row) => row.id));
+        // 确认弹窗内直接选模型：NSFW 项目在这里切到 qwen-image-2.1-nsfw（去审查档），
+        // 普通项目保持默认即可吃 turbo 快档。选中值盖到分镜图节点 metadata.model，
+        // buildGenerationConfig 读节点级模型优先于全局配置。
+        const modelOptions = (effectiveConfig.imageModels?.length ? effectiveConfig.imageModels : [imageModel]).map((m) => ({ value: m, label: modelDisplayName(effectiveConfig, m) }));
+        let chosenModel = imageModel;
+        const ok = await new Promise<boolean>((resolve) => {
+            modal.confirm({
+                title: `确认提交 ${targetRows.length} 个图片生成任务`,
+                // .ts 文件不能写 JSX：用 createElement 拼「任务数 + 模型下拉」
+                content: createElement("div", { className: "flex flex-col gap-2" },
+                    createElement("span", null, `模型（NSFW 项目请选「qwen-image-2.1-nsfw（去审查）」）：`),
+                    createElement(Select, {
+                        defaultValue: imageModel,
+                        options: modelOptions,
+                        onChange: (v: unknown) => { chosenModel = String(v); },
+                        style: { width: "100%" },
+                        showSearch: true,
+                    })),
+                okText: "确认生成",
+                cancelText: "取消",
+                centered: true,
+                onOk: () => resolve(true),
+                onCancel: () => resolve(false),
+            });
+        });
+        if (!ok) return;
+        const targets = ensureScriptImageNodes(nodeId, targetRows.map((row) => row.id), chosenModel);
         if (enqueueGenerationBatch(nodeId, "storyboard_image", targets.map((target) => ({ rowId: target.row.id, nodeId: target.node.id })))) message.success("分镜图已加入生成队列");
     }, [effectiveConfig, enqueueGenerationBatch, ensureScriptImageNodes, confirmGenerationSubmission, isAiConfigReady, message, nodesRef]);
 
