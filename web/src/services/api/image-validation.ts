@@ -123,9 +123,10 @@ export function resolveImageRequestSize(profile: ImageCapabilityConfig, quality:
         }
     }
     const dimensions = parseImageDimensions(request.value);
-    // 模型声明的精确预设（如 1920x1080）不应被自定义尺寸的 16 像素对齐规则拒绝。
+    // 模型声明的精确预设（如 1920x1080、864x480）就是契约，不走自定义尺寸的
+    // 16px 对齐和 655360 像素窗口——能力配置里声明过的档位（本地 qwen-image
+    // 草稿档全在 655K 以下）必须原样放行，否则画布提交必抛「总像素需在…之间」。
     if (request.parameter === "size" && dimensions && profile.size.values.includes(request.value)) {
-        validateImageSize(dimensions.width, dimensions.height, false);
         return request;
     }
     const value = request.parameter === "size" ? resolveRequestSize(quality, request.value) : resolveAspectRatio(request.value);

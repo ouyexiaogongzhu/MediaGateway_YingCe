@@ -2022,6 +2022,7 @@ function InfiniteCanvasPage() {
     const { addScriptRow, composeStoryboard, createAndGenerateScriptVideos, createScriptActionBoards, createScriptImageNodes, createScriptVideoNodes, generateScriptImages, generateScriptRows, generateScriptVideos, generateStoryboardMusicBatch, generateStoryboardVideoBatch, removeScriptRow, replaceScriptRows, updateScriptRow } =
         useCanvasStoryboard({
             projectId,
+            projectAspectRatio: linkedProjectQuery.data?.project?.aspectRatio,
             addedSkills,
             nodesRef,
             connectionsRef,

@@ -46,6 +46,7 @@ import {
 
 type UseCanvasStoryboardOptions = {
     projectId: string;
+    projectAspectRatio?: string;
     addedSkills: Skill[];
     nodesRef: { current: CanvasNodeData[] };
     connectionsRef: { current: CanvasConnection[] };
@@ -62,6 +63,7 @@ const NODE_STATUS_ERROR = "error" as const;
 
 export function useCanvasStoryboard({
     projectId,
+    projectAspectRatio,
     addedSkills,
     nodesRef,
     connectionsRef,
@@ -271,6 +273,10 @@ export function useCanvasStoryboard({
         if (!scriptNode || !rows.length) return [];
         const imageSpec = NODE_DEFAULT_SIZE[CanvasNodeType.Image];
         const startX = scriptNode.position.x + scriptNode.width + 120;
+        // 分镜图按项目画幅自动选草稿档（qwen-image-2.1 全部声明档都在 sd.cpp 安全区内）；
+        // 节点上已有手动选过的尺寸则不动。
+        const [ratioW, ratioH] = String(projectAspectRatio || "").split(":").map(Number);
+        const draftSize = ratioH > ratioW ? "480x864" : "864x480";
         const nextNodes = [...nodesRef.current];
         let nextConnections = [...connectionsRef.current];
         const targets: Array<{ row: StoryboardRow; node: CanvasNodeData; prompt: string }> = [];
@@ -281,8 +287,8 @@ export function useCanvasStoryboard({
             const referenceIds = storyboardRowReferenceNodeIds(scriptNode, row, nextNodes, nextConnections, false, existing?.id);
             const composerContent = storyboardComposerContent(prompt, referenceIds, nextNodes);
             const imageNode = existing
-                ? { ...existing, metadata: { ...existingMetadata, prompt, composerContent, ...storyboardPromptTemplateMetadata(row, "image"), workflowKind: "shot" as const, workflowTitle: `镜头 ${row.shotNumber} 分镜图`, shotIndex: row.shotNumber } }
-                : createCanvasNode(CanvasNodeType.Image, { x: startX + imageSpec.width / 2, y: scriptNode.position.y + index * (imageSpec.height + 36) + imageSpec.height / 2 }, { prompt, composerContent, ...storyboardPromptTemplateMetadata(row, "image"), workflowKind: "shot", workflowTitle: `镜头 ${row.shotNumber} 分镜图`, shotIndex: row.shotNumber, status: NODE_STATUS_IDLE });
+                ? { ...existing, metadata: { ...existingMetadata, size: existingMetadata.size || draftSize, prompt, composerContent, ...storyboardPromptTemplateMetadata(row, "image"), workflowKind: "shot" as const, workflowTitle: `镜头 ${row.shotNumber} 分镜图`, shotIndex: row.shotNumber } }
+                : createCanvasNode(CanvasNodeType.Image, { x: startX + imageSpec.width / 2, y: scriptNode.position.y + index * (imageSpec.height + 36) + imageSpec.height / 2 }, { prompt, composerContent, size: draftSize, ...storyboardPromptTemplateMetadata(row, "image"), workflowKind: "shot", workflowTitle: `镜头 ${row.shotNumber} 分镜图`, shotIndex: row.shotNumber, status: NODE_STATUS_IDLE });
             if (!existing) {
                 imageNode.title = `镜头 ${row.shotNumber} · 分镜图`;
                 nextNodes.push(imageNode);
@@ -311,7 +317,7 @@ export function useCanvasStoryboard({
         setNodes(nextNodes);
         setConnections(nextConnections);
         return targets;
-    }, [connectionsRef, nodesRef, setConnections, setNodes]);
+    }, [connectionsRef, nodesRef, projectAspectRatio, setConnections, setNodes]);
 
     const createScriptImageNodes = useCallback((nodeId: string, rowIds?: string[]) => {
         const scriptNode = nodesRef.current.find((node) => node.id === nodeId && node.type === CanvasNodeType.Script);
