@@ -53,7 +53,7 @@ func TestShouldRetryStoryboardOutput(t *testing.T) {
 }
 
 func TestNormalizeStoryboardTaskText(t *testing.T) {
-	result := map[string]interface{}{"mode": "text", "text": `{"title":"hotel","logline":"x","shots":[{"description":"A壓住B","videoPrompt":"緩推","visualPrompt":"床沿","shotType":"中景","characterIds":["A","B"],"durationSeconds":10,"sfxTags":["breath"]}]}`}
+	result := map[string]interface{}{"mode": "text", "text": `{"title":"hotel","logline":"x","shots":[{"description":"A壓住B","videoPrompt":"緩推","visualPrompt":"床沿","shotType":"中景","characterIds":["A","B"],"durationSeconds":10,"sfxTags":["breath"],"assetRefs":[{"name":"床"},{"name":"吊燈"}]}]}`}
 	normalizeStoryboardTaskText(result, result["text"].(string))
 	var out struct {
 		Title string           `json:"title"`
@@ -86,6 +86,19 @@ func TestNormalizeStoryboardTaskText(t *testing.T) {
 	}
 	if len(row["characters"].([]any)) != 2 {
 		t.Fatalf("characters 綁定失敗: %v", row["characters"])
+	}
+	refs, ok := row["characters"].([]any)
+	if !ok {
+		t.Fatalf("characters 應為數組: %v", row["characters"])
+	}
+	for i, ref := range refs {
+		refMap, isMap := ref.(map[string]any)
+		if !isMap || refMap["characterName"] == "" {
+			t.Fatalf("characters[%d] 應為 {characterName} 對象，得到 %v", i, ref)
+		}
+	}
+	if _, ok := row["assetRefs"]; !ok {
+		t.Fatal("assetRefs 透傳失敗")
 	}
 	if _, ok := row["sfxTags"]; !ok {
 		t.Fatal("sfxTags 透傳失敗")

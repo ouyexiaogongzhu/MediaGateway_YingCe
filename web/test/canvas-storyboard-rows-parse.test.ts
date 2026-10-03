@@ -22,8 +22,9 @@ describe("storyboardRowsFromTask", () => {
         expect(result.rows).toHaveLength(2);
         expect(result.rows[0].shotNumber).toBe(1);
         expect(result.rows[0].status).toBe("idle");
-        expect(result.rows[0].characters).toEqual(["刘备"]);
-        expect(result.rows[1].characters).toEqual(["刘备", "关羽"]);
+        // 字符串数组的 characters 必须映射成 {characterName} 对象（StoryboardCharacterReference 契约）。
+        expect(result.rows[0].characters).toEqual([{ characterName: "刘备" }]);
+        expect(result.rows[1].characters).toEqual([{ characterName: "刘备" }, { characterName: "关羽" }]);
     });
 
     test("text 内层被 ```json 代码块包裹时仍可解析", () => {

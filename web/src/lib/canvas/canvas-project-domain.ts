@@ -14,7 +14,7 @@ import { reconcileImageBatchRoot } from "@/lib/canvas/canvas-image-batch-retry";
 import { scopedLocalStorage } from "@/lib/user-scope";
 import type { GenerationTask } from "@/services/api/task-center";
 import { synchronizeGenerationSpec } from "@/lib/canvas/generation-contract";
-import { CanvasNodeType, type CanvasConnection, type CanvasNodeData, type CanvasNodeMetadata, type CanvasNodeTypeId, type ConnectionHandle, type Position, type StoryboardColumn, type StoryboardRow } from "@/types/canvas";
+import { CanvasNodeType, type CanvasConnection, type CanvasNodeData, type CanvasNodeMetadata, type CanvasNodeTypeId, type ConnectionHandle, type Position, type StoryboardAssetBinding, type StoryboardCharacterReference, type StoryboardColumn, type StoryboardRow } from "@/types/canvas";
 
 export function createCanvasNode(type: CanvasNodeTypeId, position: Position, metadata?: CanvasNodeMetadata): CanvasNodeData {
     const builtinSpec = type in NODE_DEFAULT_SIZE ? getNodeSpec(type as CanvasNodeType) : undefined;
@@ -200,15 +200,28 @@ export function storyboardRowsFromTask(task: GenerationTask) {
         // 否则可选链只能防 undefined，仍会在对象上调用 trim 使整页恢复失败。
         title: typeof result.title === "string" ? result.title.trim() : undefined,
         rows: result.rows.map((row, index) => {
-            const source = row && typeof row === "object" ? row : {};
+            // 后端 storyboard-plan 契约的 shots 里资产叫 assetRefs、characters 可能是字符串数组
+            // （角色名或 characterIds，见 generate_storyboard_rows.go）；前端类型只认 assetBindings
+            // 与 {characterName} 对象，这里做读侧兼容（normalizeStoryboardAssetBindings 会再过滤非法项）。
+            const source = row && typeof row === "object"
+                ? (row as Partial<StoryboardRow> & { characters?: unknown; assetRefs?: unknown })
+                : {};
             const next = createStoryboardRow(index + 1, {
                 ...normalizeStoryboardRow(source),
                 id: `shot-${Date.now()}-${index + 1}-${Math.random().toString(36).slice(2, 6)}`,
                 shotNumber: index + 1,
                 status: "idle",
-                assetBindings: normalizeStoryboardAssetBindings(Array.isArray(source.assetBindings) ? source.assetBindings : undefined),
+                assetBindings: normalizeStoryboardAssetBindings(
+                    Array.isArray(source.assetBindings)
+                        ? source.assetBindings
+                        : Array.isArray(source.assetRefs) ? (source.assetRefs as StoryboardAssetBinding[]) : undefined,
+                ),
             });
-            next.characters = Array.isArray(source.characters) ? source.characters : [];
+            const rawCharacters: unknown[] = Array.isArray(source.characters) ? source.characters : [];
+            next.characters = rawCharacters.flatMap((entry): StoryboardCharacterReference[] => {
+                if (typeof entry === "string") return entry.trim() ? [{ characterName: entry.trim() }] : [];
+                return entry && typeof entry === "object" ? [entry as StoryboardCharacterReference] : [];
+            });
             next.mustHave = Array.isArray(source.mustHave) ? source.mustHave : [];
             next.optionalDetails = Array.isArray(source.optionalDetails) ? source.optionalDetails : [];
             return next;
