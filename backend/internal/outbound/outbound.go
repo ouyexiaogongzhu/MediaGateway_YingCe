@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"log"
 	"net/url"
 	"os"
 	"strings"
@@ -358,6 +359,10 @@ func resolveOutboundHostWithPolicy(ctx context.Context, host string, allowPrivat
 	if !allowPrivateHost {
 		for _, ip := range addresses {
 			if blockedOutboundIP(ip) {
+				// 瞬态诊断：同进程同 env 下偶发走到这里（15:36/16:19/19:0x 三次实录），
+				// 打出 host/解析 IP/开关实际读值，下次复现直接定责。
+				log.Printf("outbound private-ip rejected: host=%q ips=%v allow_private_env=%q pinned_hosts=%q",
+					host, addresses, strings.TrimSpace(os.Getenv("CANVAS_ALLOW_PRIVATE_UPSTREAMS")), os.Getenv("CANVAS_ALLOWED_PRIVATE_UPSTREAM_HOSTS"))
 				return nil, BadAuthRequest("不允许访问本机、内网或链路本地地址")
 			}
 		}
