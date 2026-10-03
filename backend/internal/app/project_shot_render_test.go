@@ -115,7 +115,7 @@ func (f *fakeGateway) submitted(t *testing.T, jobType string) []map[string]any {
 	return result
 }
 
-func newRenderAllTestService(t *testing.T) (*Service, *fakeGateway) {
+func newRenderAllTestService(t *testing.T, aspectRatio ...string) (*Service, *fakeGateway) {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+newID()+"?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
@@ -128,7 +128,7 @@ func newRenderAllTestService(t *testing.T) (*Service, *fakeGateway) {
 		t.Fatal(err)
 	}
 	now := time.Now()
-	if err := db.Create(&model.Project{ID: "project-render", UserID: "user-render", Name: "连续渲染测试", Status: model.ProjectStatusActive, Revision: 1, CreatedAt: now, UpdatedAt: now}).Error; err != nil {
+	if err := db.Create(&model.Project{ID: "project-render", UserID: "user-render", Name: "连续渲染测试", AspectRatio: aspectRatioValue(aspectRatio), Status: model.ProjectStatusActive, Revision: 1, CreatedAt: now, UpdatedAt: now}).Error; err != nil {
 		t.Fatal(err)
 	}
 	shots := []model.Shot{
@@ -318,4 +318,46 @@ func TestRenderAllProjectShotsStopsOnFailure(t *testing.T) {
 	if shots[0].Status != "completed" {
 		t.Fatalf("completed shot status = %q, artifacts must survive failure", shots[0].Status)
 	}
+}
+
+// 首帧曾落 qwen_image 缺省 1024x1024（实测死锁尺寸），且与视频画幅不一致。
+// 这条锁住「首帧与视频同幅、且按项目 aspectRatio 推导」。
+func TestRenderAllProjectShotsDerivesSizeFromAspectRatio(t *testing.T) {
+	service, gateway := newRenderAllTestService(t, "9:16")
+	if _, err := service.RenderAllProjectShots(context.Background(), "user-render", "project-render", RenderAllShotsRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	jobs := gateway.submitted(t, "shot")
+	image, ok := jobs[0]["image"].(map[string]any)
+	if !ok {
+		t.Fatal("first shot missing image stage")
+	}
+	video := jobs[0]["video"].(map[string]any)
+	if fmt.Sprint(image["width"]) != "480" || fmt.Sprint(image["height"]) != "864" {
+		t.Fatalf("image size = %vx%v, want 480x864", image["width"], image["height"])
+	}
+	if fmt.Sprint(video["width"]) != "480" || fmt.Sprint(video["height"]) != "864" {
+		t.Fatalf("video size = %vx%v, want 480x864", video["width"], video["height"])
+	}
+}
+
+// 显式传入的画幅优先于项目设置。
+func TestRenderAllProjectShotsHonoursExplicitSize(t *testing.T) {
+	service, gateway := newRenderAllTestService(t)
+	_, err := service.RenderAllProjectShots(context.Background(), "user-render", "project-render",
+		RenderAllShotsRequest{Width: 1024, Height: 576})
+	if err != nil {
+		t.Fatal(err)
+	}
+	video := gateway.submitted(t, "shot")[0]["video"].(map[string]any)
+	if fmt.Sprint(video["width"]) != "1024" || fmt.Sprint(video["height"]) != "576" {
+		t.Fatalf("video size = %vx%v, want 1024x576", video["width"], video["height"])
+	}
+}
+
+func aspectRatioValue(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
 }

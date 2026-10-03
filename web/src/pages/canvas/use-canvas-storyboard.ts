@@ -47,6 +47,8 @@ import {
 type UseCanvasStoryboardOptions = {
     projectId: string;
     projectAspectRatio?: string;
+    // 批次节点是异步载入的；恢复轮询必须等它，否则 effect 跑在空 nodes 上等于没跑。
+    projectLoaded?: boolean;
     addedSkills: Skill[];
     nodesRef: { current: CanvasNodeData[] };
     connectionsRef: { current: CanvasConnection[] };
@@ -64,6 +66,7 @@ const NODE_STATUS_ERROR = "error" as const;
 export function useCanvasStoryboard({
     projectId,
     projectAspectRatio,
+    projectLoaded,
     addedSkills,
     nodesRef,
     connectionsRef,
@@ -643,31 +646,36 @@ export function useCanvasStoryboard({
     const generateStoryboardVideoBatch = useCallback(async (nodeId: string) => {
         const rows = storyboardBatchRows(nodeId);
         if (!rows.length) return message.warning("请先生成分镜表");
-        patchStoryboardMetadata(nodeId, { storyboardVideoBatch: { taskId: "", status: "running", stage: "正在收集首帧", progress: 2, rows: {} } });
+        // 只补没出片的镜头：h3 一镜约 12 分钟，重按全量 = 把已成功的行全部重排队重计费。
+        // 跳过行的状态由 storyboardVideoBatchState 从 previous 原样带回，合成仍认得旧片。
+        const previous = nodesRef.current.find((node) => node.id === nodeId && node.type === CanvasNodeType.Script)?.metadata?.storyboardVideoBatch;
+        const pending = pendingStoryboardVideoRows(rows, previous?.rows);
+        if (!pending.length) return message.info("所有镜头视频都已生成");
+        patchStoryboardMetadata(nodeId, { storyboardVideoBatch: { taskId: "", status: "running", stage: "正在收集首帧", progress: 2, rows: previous?.rows || {} } });
         try {
             const firstFrameResourceIds: Record<string, string> = {};
-            for (const row of rows) {
+            for (const row of pending) {
                 const imageNode = row.imageNodeId ? nodesRef.current.find((node) => node.id === row.imageNodeId && node.type === CanvasNodeType.Image) : undefined;
                 const resourceId = await storyboardFirstFrameResourceId(imageNode?.metadata?.content);
                 if (!resourceId) continue;
                 firstFrameResourceIds[String(row.shotNumber)] = resourceId;
             }
-            const task = await createStoryboardVideoBatch({ projectId, rows: rows.map(storyboardShotPayload), firstFrameResourceIds });
-            patchStoryboardMetadata(nodeId, { storyboardVideoBatch: { taskId: task.id, status: "running", stage: task.stage, progress: task.progress, rows: {} } });
+            const task = await createStoryboardVideoBatch({ projectId, rows: pending.map(storyboardShotPayload), firstFrameResourceIds });
+            patchStoryboardMetadata(nodeId, { storyboardVideoBatch: { taskId: task.id, status: "running", stage: task.stage, progress: task.progress, rows: previous?.rows || {} } });
             const completed = await waitForGenerationTask(task.id, {
                 initialTask: task,
                 // 默认 storyboard 轮询超时 13 分钟，行级视频批量可能远超，给足 60 分钟。
                 timeoutMs: 60 * 60 * 1000,
-                onTaskUpdate: (next) => patchStoryboardMetadata(nodeId, { storyboardVideoBatch: { taskId: next.id, status: next.status === "succeeded" ? "succeeded" : next.status === "queued" ? "queued" : "running", stage: next.stage, progress: next.progress, rows: {} } }),
+                onTaskUpdate: (next) => patchStoryboardMetadata(nodeId, { storyboardVideoBatch: { taskId: next.id, status: next.status === "succeeded" ? "succeeded" : next.status === "queued" ? "queued" : "running", stage: next.stage, progress: next.progress, rows: previous?.rows || {} } }),
             });
-            const state = storyboardVideoBatchState(completed, rows);
+            const state = storyboardVideoBatchState(completed, pending, previous?.rows);
             patchStoryboardMetadata(nodeId, { storyboardVideoBatch: state });
             const succeeded = Object.values(state.rows).filter((row) => row.status === "succeeded").length;
             if (state.status === "succeeded") message.success(`一键视频完成：成功 ${succeeded}/${rows.length}`);
             else message.error(state.error || "一键视频任务失败");
         } catch (error) {
             const details = generationErrorMessage(error);
-            patchStoryboardMetadata(nodeId, { storyboardVideoBatch: { taskId: "", status: "failed", error: details, rows: {} } });
+            patchStoryboardMetadata(nodeId, { storyboardVideoBatch: { taskId: "", status: "failed", error: details, rows: previous?.rows || {} } });
             message.error(details);
         }
     }, [message, nodesRef, patchStoryboardMetadata, projectId, storyboardBatchRows]);
@@ -675,25 +683,30 @@ export function useCanvasStoryboard({
     const generateStoryboardMusicBatch = useCallback(async (nodeId: string) => {
         const rows = storyboardBatchRows(nodeId);
         if (!rows.length) return message.warning("请先生成分镜表");
-        patchStoryboardMetadata(nodeId, { storyboardMusicBatch: { taskId: "", status: "running", stage: "正在创建任务", progress: 2, segments: [] } });
+        // 同视频批次：已有配乐的段整组跳过。段是按 musicGroupId 生成的，
+        // 丢掉整组不会改变剩余组的时长累计（后端按组累加 rows 的 DurationSeconds）。
+        const previous = nodesRef.current.find((node) => node.id === nodeId && node.type === CanvasNodeType.Script)?.metadata?.storyboardMusicBatch;
+        const pending = pendingStoryboardMusicRows(rows, previous?.segments);
+        if (!pending.length) return message.info("所有音乐段都已生成");
+        patchStoryboardMetadata(nodeId, { storyboardMusicBatch: { taskId: "", status: "running", stage: "正在创建任务", progress: 2, segments: previous?.segments || [] } });
         try {
-            const task = await createStoryboardMusicBatch({ projectId, rows: rows.map(storyboardShotPayload) });
-            patchStoryboardMetadata(nodeId, { storyboardMusicBatch: { taskId: task.id, status: "running", stage: task.stage, progress: task.progress, segments: [] } });
+            const task = await createStoryboardMusicBatch({ projectId, rows: pending.map(storyboardShotPayload) });
+            patchStoryboardMetadata(nodeId, { storyboardMusicBatch: { taskId: task.id, status: "running", stage: task.stage, progress: task.progress, segments: previous?.segments || [] } });
             const completed = await waitForGenerationTask(task.id, {
                 initialTask: task,
-                onTaskUpdate: (next) => patchStoryboardMetadata(nodeId, { storyboardMusicBatch: { taskId: next.id, status: next.status === "succeeded" ? "succeeded" : next.status === "queued" ? "queued" : "running", stage: next.stage, progress: next.progress, segments: [] } }),
+                onTaskUpdate: (next) => patchStoryboardMetadata(nodeId, { storyboardMusicBatch: { taskId: next.id, status: next.status === "succeeded" ? "succeeded" : next.status === "queued" ? "queued" : "running", stage: next.stage, progress: next.progress, segments: previous?.segments || [] } }),
             });
-            const segments = storyboardMusicSegments(completed);
+            const segments = [...(previous?.segments || []), ...storyboardMusicSegments(completed)];
             const status = completed.status === "succeeded" ? "succeeded" : "failed";
             patchStoryboardMetadata(nodeId, { storyboardMusicBatch: { taskId: completed.id, status, progress: 100, stage: completed.stage, segments } });
             if (status === "succeeded") message.success(`一键音乐完成：${segments.length} 段配乐`);
             else message.error("一键音乐任务失败");
         } catch (error) {
             const details = generationErrorMessage(error);
-            patchStoryboardMetadata(nodeId, { storyboardMusicBatch: { taskId: "", status: "failed", error: details, segments: [] } });
+            patchStoryboardMetadata(nodeId, { storyboardMusicBatch: { taskId: "", status: "failed", error: details, segments: previous?.segments || [] } });
             message.error(details);
         }
-    }, [message, patchStoryboardMetadata, projectId, storyboardBatchRows]);
+    }, [message, nodesRef, patchStoryboardMetadata, projectId, storyboardBatchRows]);
 
     const composeStoryboard = useCallback(async (nodeId: string) => {
         const scriptNode = nodesRef.current.find((node) => node.id === nodeId && node.type === CanvasNodeType.Script);
@@ -733,6 +746,72 @@ export function useCanvasStoryboard({
             message.error(details);
         }
     }, [message, nodesRef, patchStoryboardMetadata, projectId, storyboardBatchRows]);
+
+    // 重整后恢复批次轮询：批次状态是持久化的，但轮询只活在点击 handler 的
+    // async 闭包里，F5 就没有人再去查那个 taskId —— 进度条会永远停在 "生成中 x%"，
+    // 让人以为卡死而重按（那会重排队所有镜头）。这里按 taskId 重新挂上同一个
+    // waitForGenerationTask，taskId 为空才真的无从恢复（提交中/已终态）。
+    const resumedRef = useRef(new Set<string>());
+    useEffect(() => {
+        if (!projectLoaded) return;
+        const resumable: Array<{ nodeId: string; taskId: string }> = [];
+        nodesRef.current.forEach((node) => {
+            if (node.type !== CanvasNodeType.Script) return;
+            const video = node.metadata?.storyboardVideoBatch;
+            const music = node.metadata?.storyboardMusicBatch;
+            if (video?.taskId && (video.status === "running" || video.status === "queued")) resumable.push({ nodeId: node.id, taskId: video.taskId });
+            if (music?.taskId && (music.status === "running" || music.status === "queued")) resumable.push({ nodeId: node.id, taskId: music.taskId });
+        });
+        // 每个 taskId 只恢复一次；waitForGenerationTask 自带 per-id 去重，
+        // 这里再挡一道是为了不让每次 setNodes 触发的重渲染重复挂轮询。
+        resumable.forEach(({ nodeId, taskId }) => {
+            if (resumedRef.current.has(taskId)) return;
+            resumedRef.current.add(taskId);
+            waitForGenerationTask(taskId, {
+                timeoutMs: 60 * 60 * 1000, // 与一键视频一致：行级批量远超默认 13 分钟
+                onTaskUpdate: (next) => {
+                    setNodes((current) => current.map((node) => {
+                        if (node.id !== nodeId) return node;
+                        const video = node.metadata?.storyboardVideoBatch;
+                        const music = node.metadata?.storyboardMusicBatch;
+                        if (video?.taskId === taskId) {
+                            return { ...node, metadata: { ...node.metadata, storyboardVideoBatch: { ...video, taskId: next.id, status: next.status === "succeeded" ? "succeeded" : next.status === "queued" ? "queued" : "running", stage: next.stage, progress: next.progress } } };
+                        }
+                        if (music?.taskId === taskId) {
+                            return { ...node, metadata: { ...node.metadata, storyboardMusicBatch: { ...music, taskId: next.id, status: next.status === "succeeded" ? "succeeded" : next.status === "queued" ? "queued" : "running", stage: next.stage, progress: next.progress } } };
+                        }
+                        return node;
+                    }));
+                },
+            }).then((completed) => {
+                const rows = nodesRef.current
+                    .find((node) => node.id === nodeId)
+                    ?.metadata?.storyboard?.rows || [];
+                setNodes((current) => current.map((node) => {
+                    if (node.id !== nodeId) return node;
+                    const video = node.metadata?.storyboardVideoBatch;
+                    const music = node.metadata?.storyboardMusicBatch;
+                    if (video?.taskId === taskId && rows.length) {
+                        return { ...node, metadata: { ...node.metadata, storyboardVideoBatch: storyboardVideoBatchState(completed, rows, video.rows) } };
+                    }
+                    if (music?.taskId === taskId) {
+                        return { ...node, metadata: { ...node.metadata, storyboardMusicBatch: { ...music, status: completed.status === "succeeded" ? "succeeded" : "failed", progress: 100, stage: completed.stage, segments: [...music.segments, ...storyboardMusicSegments(completed)] } } };
+                    }
+                    return node;
+                }));
+            }).catch(() => {
+                // 恢复轮询失败（任务已消失/网络断）：落终态即可，别把进度条留在 running。
+                setNodes((current) => current.map((node) => {
+                    if (node.id !== nodeId) return node;
+                    const video = node.metadata?.storyboardVideoBatch;
+                    const music = node.metadata?.storyboardMusicBatch;
+                    if (video?.taskId === taskId) return { ...node, metadata: { ...node.metadata, storyboardVideoBatch: { ...video, status: "failed", error: "任务状态已丢失，请重新生成" } } };
+                    if (music?.taskId === taskId) return { ...node, metadata: { ...node.metadata, storyboardMusicBatch: { ...music, status: "failed", error: "任务状态已丢失，请重新生成" } } };
+                    return node;
+                }));
+            });
+        });
+    }, [nodesRef, projectLoaded, setNodes]);
 
     return {
         addScriptRow,
@@ -787,6 +866,17 @@ function storyboardMusicGroupIds(rows: StoryboardRow[]) {
     return Array.from(new Set(rows.map((row) => row.musicGroupId?.trim() || "seg-01")));
 }
 
+// 已出片的镜头不再重排队：h3 一镜约 12 分钟，整批重跑是按行数乘进去的 GPU 浪费。
+export function pendingStoryboardVideoRows(rows: StoryboardRow[], previous?: StoryboardVideoBatchState["rows"]) {
+    return rows.filter((row) => !previous?.[row.id]?.videoResourceId);
+}
+
+// 配乐按 musicGroupId 成段生成，已有配乐的段整组跳过（丢整组不改变剩余组的时长累计）。
+export function pendingStoryboardMusicRows(rows: StoryboardRow[], previous?: StoryboardMusicBatchState["segments"]) {
+    const done = new Set((previous || []).filter((item) => item.resourceId).map((item) => item.musicGroupId));
+    return rows.filter((row) => !done.has(row.musicGroupId?.trim() || "seg-01"));
+}
+
 function storyboardMusicResourceIds(rows: StoryboardRow[], segments: StoryboardMusicBatchState["segments"]) {
     return Object.fromEntries(storyboardMusicGroupIds(rows).flatMap((groupId) => {
         const segment = segments.find((item) => item.musicGroupId === groupId && item.resourceId);
@@ -794,10 +884,12 @@ function storyboardMusicResourceIds(rows: StoryboardRow[], segments: StoryboardM
     }));
 }
 
-function storyboardVideoBatchState(task: GenerationTask, rows: StoryboardRow[]): StoryboardVideoBatchState {
+function storyboardVideoBatchState(task: GenerationTask, rows: StoryboardRow[], previous?: StoryboardVideoBatchState["rows"]): StoryboardVideoBatchState {
     const parsed = JSON.parse(task.resultJson || "{}") as { rows?: Array<{ shotNumber: number; status: string; error?: string; videoResourceId?: string }> };
     const resultByShotNumber = new Map((parsed.rows || []).map((item) => [item.shotNumber, item]));
-    const rowStates: StoryboardVideoBatchState["rows"] = {};
+    // 先铺上次的结果：本次没入队的行（已出片）必须留在表里，
+    // composeStoryboard 按 videoResourceId 判缺片，丢了会误报"还没有视频"。
+    const rowStates: StoryboardVideoBatchState["rows"] = { ...previous };
     rows.forEach((row) => {
         const result = resultByShotNumber.get(row.shotNumber);
         if (!result) return;

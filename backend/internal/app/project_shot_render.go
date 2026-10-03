@@ -23,6 +23,24 @@ type RenderAllShotsRequest struct {
 	FromShotID  string `json:"fromShotId"`
 	// Draft：纯 h3 快速草稿（跳过 image/voice/music/混音，512x288），确认构图后再走完整链
 	Draft bool `json:"draft"`
+	// 画幅覆盖；留空按项目 aspectRatio 推导（见 shotRenderSize）。
+	// 不传会让首帧落 qwen_image 的 1024x1024 缺省——那是实测会死锁的尺寸。
+	Width  int `json:"width"`
+	Height int `json:"height"`
+}
+
+// shotRenderSize 缺省画幅。首帧与视频必须同幅：首帧会被 h3 缩到视频画布，
+// 比例不一致等于先按一个比例生成再被裁成另一个。
+// 864x480 / 480x864 与 Gateway video 缺省一致且都在 32 网格上；
+// 分镜图链路（4b08f881）也用同一组值，两条路保持一致。
+func shotRenderSize(aspectRatio string, draft bool) (int, int) {
+	if draft {
+		return 512, 288 // 草稿固定横屏快档，取速度不取画幅
+	}
+	if strings.TrimSpace(aspectRatio) == "9:16" {
+		return 480, 864
+	}
+	return 864, 480
 }
 
 type RenderAllShotsResult struct {
@@ -57,6 +75,10 @@ func (s *Service) RenderAllProjectShots(ctx context.Context, userID string, proj
 	}
 	if len(shots) == 0 {
 		return nil, BadAuthRequest("项目还没有分镜")
+	}
+	// 请求没带画幅就按项目推导一次，对整批镜头生效。
+	if req.Width <= 0 || req.Height <= 0 {
+		req.Width, req.Height = shotRenderSize(project.AspectRatio, req.Draft)
 	}
 	start := 0
 	if fromID := strings.TrimSpace(req.FromShotID); fromID != "" {
@@ -150,12 +172,18 @@ func (s *Service) renderProjectShot(ctx context.Context, gateway *gatewayClient,
 	if firstNonEmpty(strings.TrimSpace(revision.VideoPrompt), revision.PlotDescription) == "" && !req.Draft {
 		return result, "", false, BadAuthRequest("镜头缺少画面提示词")
 	}
+	width, height := req.Width, req.Height
+	if width <= 0 || height <= 0 {
+		width, height = shotRenderSize("", req.Draft)
+	}
 	if !continueChain && !req.Draft {
 		imagePrompt := strings.TrimSpace(revision.ImagePrompt)
 		if imagePrompt == "" {
 			return result, "", false, BadAuthRequest("镜头缺少画面提示词，无法生成首帧")
 		}
-		params["image"] = map[string]any{"prompt": imagePrompt}
+		// 首帧必须与视频同幅：不传就落 qwen_image 缺省 1024x1024（实测死锁尺寸），
+		// 且与下面的视频画幅不一致，h3 缩画布时还会再裁一次。
+		params["image"] = map[string]any{"prompt": imagePrompt, "width": width, "height": height}
 	}
 	seconds := float64(revision.DurationMs) / 1000
 	if seconds <= 0 {
@@ -166,6 +194,8 @@ func (s *Service) renderProjectShot(ctx context.Context, gateway *gatewayClient,
 		"first_frame": "auto",
 		// P0 定档：完整链走 quality（D 档，4.6× vs reference）；草稿另有 512x288 快路径
 		"profile": "quality",
+		"width":   width,
+		"height":  height,
 	}
 	if continueChain {
 		video["first_frame"] = previousLastFrame
@@ -178,8 +208,6 @@ func (s *Service) renderProjectShot(ctx context.Context, gateway *gatewayClient,
 			return result, "", false, BadAuthRequest("草稿镜头缺少画面提示词")
 		}
 		video["profile"] = "draft" // 覆盖上面误设的 quality（6步/internal，512x288 下无 internal）
-		// ponytail: 草稿固定 512x288，竖屏分寸需要按项目画幅细分时再查 project
-		video["width"], video["height"] = 512, 288
 		if !continueChain {
 			delete(video, "first_frame") // 草稿没有 image 阶段，纯文生视频
 		}
@@ -485,8 +513,13 @@ func (s *Service) registerGatewayFileResource(userID string, projectTitle string
 // 台词 Ref2VA + h3 音轨静音），不做跨镜续链与拼接。供「生成镜头视频」按钮直连，
 // 替换裸 canvas_video 快路径（那条路没有 voice/music，且 h3 自带音轨是噪音源）。
 func (s *Service) RenderProjectShot(ctx context.Context, userID string, projectID string, shotID string, req RenderAllShotsRequest) (*RenderedShotResult, error) {
-	if _, err := s.activeProjectForUser(userID, projectID); err != nil {
+	project, err := s.activeProjectForUser(userID, projectID)
+	if err != nil {
 		return nil, err
+	}
+	// 与 render-all 同一套推导，单镜头按钮才不会退回 1024x1024 缺省。
+	if req.Width <= 0 || req.Height <= 0 {
+		req.Width, req.Height = shotRenderSize(project.AspectRatio, req.Draft)
 	}
 	gateway := s.mediaGateway()
 	shots, err := s.repo.ProjectShots(projectID)

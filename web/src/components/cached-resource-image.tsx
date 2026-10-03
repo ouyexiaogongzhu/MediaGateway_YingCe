@@ -24,6 +24,7 @@ export function CachedResourceImage({ storageKey, src = "", fallback = null, loa
     const [nearViewport, setNearViewport] = useState(eager || !remoteResource);
     const [cachedSrc, setCachedSrc] = useState(remoteResource ? "" : src);
     const [cacheFailed, setCacheFailed] = useState(false);
+    const reSignedRef = useRef(false);
 
     useEffect(() => {
         if (!remoteResource || eager) {
@@ -51,6 +52,7 @@ export function CachedResourceImage({ storageKey, src = "", fallback = null, loa
     useEffect(() => {
         let cancelled = false;
         setCacheFailed(false);
+        reSignedRef.current = false; // 换资源后允许重新试一次重签
 
         if (remoteResource && resourceId) {
             if (!nearViewport) {
@@ -101,6 +103,20 @@ export function CachedResourceImage({ storageKey, src = "", fallback = null, loa
                     setCacheFailed(true);
                     onError?.(e);
                 })
+                .catch(() => {
+                    setCacheFailed(true);
+                    onError?.(e);
+                });
+            return;
+        }
+        // 远程签名 URL 有 TTL，过期后同一张图会一直 403。重签一次就好：
+        // 复用上面已经在用的 getResourceAccess，不引新机制。只试一次，
+        // 否则真 404（资源已删）会变成无限重签的请求风暴。
+        if (remoteResource && resourceId && !cacheFailed && !reSignedRef.current) {
+            reSignedRef.current = true;
+            setCacheFailed(false);
+            void getResourceAccess(storageKey, "display")
+                .then((access) => setCachedSrc(resolveResourceAccessURL(access.url)))
                 .catch(() => {
                     setCacheFailed(true);
                     onError?.(e);

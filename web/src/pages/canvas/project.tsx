@@ -2023,6 +2023,7 @@ function InfiniteCanvasPage() {
         useCanvasStoryboard({
             projectId,
             projectAspectRatio: linkedProjectQuery.data?.project?.aspectRatio,
+            projectLoaded,
             addedSkills,
             nodesRef,
             connectionsRef,
