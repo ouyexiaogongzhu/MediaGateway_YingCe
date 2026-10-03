@@ -172,7 +172,7 @@ export type ShotArtifact = {
     shotId: string;
     revisionId?: string;
     taskId?: string;
-    type: "storyboard" | "action_board" | "start_frame" | "end_frame" | "video" | "audio" | "subtitle" | "delivery" | string;
+    type: "storyboard" | "action_board" | "start_frame" | "end_frame" | "shot_last_frame" | "video" | "audio" | "subtitle" | "delivery" | string;
     version: number;
     resourceId?: string;
     status: "pending" | "running" | "ready" | "failed" | "stale" | string;

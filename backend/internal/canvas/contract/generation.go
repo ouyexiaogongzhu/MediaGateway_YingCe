@@ -282,6 +282,8 @@ func NodeGenerationProjection(metadata map[string]any) (map[string]any, error) {
 		"logicalModelId": {}, "channelId": {}, "channelModelKey": {},
 		"videoStartFrameNodeId": {}, "videoEndFrameNodeId": {},
 		"videoEditOperation": {}, "referenceNodeIds": {},
+		// Frontend video-frame node mapping keys (canvas-video-frame-nodes.ts).
+		"videoFrameSourceNodeId": {}, "videoFrameTimeMs": {},
 	}
 	typ := reflect.TypeOf(Options{})
 	for i := 0; i < typ.NumField(); i++ {
