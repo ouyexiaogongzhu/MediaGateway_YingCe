@@ -414,6 +414,46 @@ func TestUnlinkShotAssetDeletesReferenceAndInvalidatesProduction(t *testing.T) {
 	}
 }
 
+// Position 是 *int（省略 ≠ 0），構造顯式位置時用它。
+func shotPosition(v int) *int { return &v }
+
+func TestCreateProjectShotKeepsPositionWhenOmitted(t *testing.T) {
+	// 回歸：前端 saveProjectShot 的 position 可選。改鏡頭台詞/描述時不帶 position，
+	// 舊碼把它解成 0 靜默改寫順序，兩個鏡頭都變 position 0，render-all 排序與
+	// last_frame 銜接鏈就變成不確定。這裡釘死「省略＝沿用原順序」。
+	service, db := newProjectWorkflowV2TestService(t)
+	project, unit := seedWorkflowProject(t, db)
+	if _, err := service.CreateProjectShot("user-1", project.ID, CreateProjectShotRequest{
+		UnitID: unit.ID, Title: "SC.01", Description: "镜头画面", Position: shotPosition(0), DurationMs: 3000,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	second, err := service.CreateProjectShot("user-1", project.ID, CreateProjectShotRequest{
+		UnitID: unit.ID, Title: "SC.02", Description: "镜头画面", Position: shotPosition(1), DurationMs: 3000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 只改台詞，不帶 position。
+	updated, err := service.CreateProjectShot("user-1", project.ID, CreateProjectShotRequest{
+		ID: second.ID, UnitID: unit.ID, Title: "SC.02", Description: "镜头画面", DurationMs: 3000,
+		Revision: ShotRevisionInput{Dialogue: "台詞"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Position != 1 {
+		t.Fatalf("position = %d, want 1（省略 position 不該重排）", updated.Position)
+	}
+	var stored model.Shot
+	if err := db.Model(&model.Shot{}).Where("id = ?", second.ID).First(&stored).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.Position != 1 {
+		t.Fatalf("stored position = %d, want 1", stored.Position)
+	}
+}
+
 func TestDeleteProjectShotCleansRelationsAndCompactsPositions(t *testing.T) {
 	service, db := newProjectWorkflowV2TestService(t)
 	project, unit := seedWorkflowProject(t, db)
@@ -427,7 +467,7 @@ func TestDeleteProjectShotCleansRelationsAndCompactsPositions(t *testing.T) {
 	shots := make([]model.Shot, 0, 3)
 	for index, title := range []string{"SC.01", "SC.02", "SC.03"} {
 		shot, createErr := service.CreateProjectShot("user-1", project.ID, CreateProjectShotRequest{
-			UnitID: unit.ID, Title: title, Description: "镜头画面", Position: index, DurationMs: 3000,
+			UnitID: unit.ID, Title: title, Description: "镜头画面", Position: shotPosition(index), DurationMs: 3000,
 		})
 		if createErr != nil {
 			t.Fatal(createErr)

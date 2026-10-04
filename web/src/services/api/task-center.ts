@@ -406,7 +406,7 @@ export async function waitForGenerationTask(id: string, options?: WaitForGenerat
         }
         throw error;
     }
-    throw new Error(lastQueryError instanceof Error ? `任务状态同步失败：${lastQueryError.message}` : "任务执行超时，请稍后重试");
+    throw new TaskWaitTimeoutError(lastQueryError instanceof Error ? `任务状态同步失败：${lastQueryError.message}` : "任务执行超时，请稍后重试");
 }
 
 async function waitForGenerationTaskTextEvents(id: string, options: WaitForGenerationTaskOptions) {
@@ -503,7 +503,7 @@ async function waitForGenerationTaskTextEvents(id: string, options: WaitForGener
         }
         await delay(intervalMs, options.signal);
     }
-    throw new Error(lastStreamError instanceof Error ? `任务文本流同步失败：${lastStreamError.message}` : "任务执行超时，请稍后重试");
+    throw new TaskWaitTimeoutError(lastStreamError instanceof Error ? `任务文本流同步失败：${lastStreamError.message}` : "任务执行超时，请稍后重试");
 }
 
 function asTaskTextStreamRecord(value: unknown): Record<string, unknown> {
@@ -522,6 +522,18 @@ class TaskTextStreamFatalError extends Error {
     constructor(message: string) {
         super(message);
         this.name = "TaskTextStreamFatalError";
+    }
+}
+
+/**
+ * 轮询窗口到期 —— 只代表"客户端不等了"，不代表服务端任务结束。
+ * 调用方必须把它和"任务真的 failed/cancelled"分开处理：
+ * 前者清掉 taskId 会让按钮复原，用户一按就把同一批镜头再渲一遍（P0-4）。
+ */
+export class TaskWaitTimeoutError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = "TaskWaitTimeoutError";
     }
 }
 

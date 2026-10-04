@@ -26,9 +26,10 @@ import { generationErrorMessage } from "@/lib/generation-error";
 import { navigateToSettings } from "@/lib/settings-navigation";
 import { uploadImage } from "@/services/image-storage";
 import { resourceIdFromStorageKey } from "@/services/api/resources";
+import { ApiError } from "@/services/api/request";
 import { createStoryboardCompose, createStoryboardMusicBatch, createStoryboardVideoBatch, type StoryboardShotPayload } from "@/services/api/storyboard-batch";
 import type { Skill } from "@/services/api/skills";
-import { createGenerationTask, waitForGenerationTask, type GenerationTask } from "@/services/api/task-center";
+import { createGenerationTask, queryGenerationTask, TaskWaitTimeoutError, waitForGenerationTask, type GenerationTask } from "@/services/api/task-center";
 import { skillRuntime } from "@/services/skill-runtime";
 import { submitStoryboardTask } from "@/services/storyboard-submission";
 import { getActiveUserScope } from "@/lib/user-scope";
@@ -643,15 +644,33 @@ export function useCanvasStoryboard({
         return [...(scriptNode?.metadata?.storyboard?.rows || [])].sort((a, b) => a.shotNumber - b.shotNumber);
     }, [nodesRef]);
 
+    // 重按闸门：按钮恢复可点不等于上一个任务死了。先向服务端确认它真的不在 active 状态，
+    // 否则同一批镜头会被排第二次队 —— 实测 ~740s/镜，20 镜误按一次就是几小时白烧。
+    const guardBatchTaskIdle = useCallback(async (taskId: string) => {
+        try {
+            if (!batchTaskStillActive(await queryGenerationTask(taskId))) return true;
+            message.warning(`上一次任务 ${taskId} 仍在服务端运行，请等它结束再重新生成`);
+            return false;
+        } catch (error) {
+            // 只有 404 能证明任务没了；断网/5xx 一律按"可能还在跑"挡住，宁可多挡一次。
+            if (isMissingTaskError(error)) return true;
+            message.warning(`无法确认上一次任务 ${taskId} 的状态，已挡下本次提交以免重复渲染；请先在任务中心确认`);
+            return false;
+        }
+    }, [message]);
+
     const generateStoryboardVideoBatch = useCallback(async (nodeId: string) => {
         const rows = storyboardBatchRows(nodeId);
         if (!rows.length) return message.warning("请先生成分镜表");
         // 只补没出片的镜头：h3 一镜约 12 分钟，重按全量 = 把已成功的行全部重排队重计费。
         // 跳过行的状态由 storyboardVideoBatchState 从 previous 原样带回，合成仍认得旧片。
         const previous = nodesRef.current.find((node) => node.id === nodeId && node.type === CanvasNodeType.Script)?.metadata?.storyboardVideoBatch;
+        if (previous?.taskId && !await guardBatchTaskIdle(previous.taskId)) return;
         const pending = pendingStoryboardVideoRows(rows, previous?.rows);
         if (!pending.length) return message.info("所有镜头视频都已生成");
         patchStoryboardMetadata(nodeId, { storyboardVideoBatch: { taskId: "", status: "running", stage: "正在收集首帧", progress: 2, rows: previous?.rows || {} } });
+        let taskId = "";
+        let progress = 2;
         try {
             const firstFrameResourceIds: Record<string, string> = {};
             for (const row of pending) {
@@ -661,12 +680,16 @@ export function useCanvasStoryboard({
                 firstFrameResourceIds[String(row.shotNumber)] = resourceId;
             }
             const task = await createStoryboardVideoBatch({ projectId, rows: pending.map(storyboardShotPayload), firstFrameResourceIds });
-            patchStoryboardMetadata(nodeId, { storyboardVideoBatch: { taskId: task.id, status: "running", stage: task.stage, progress: task.progress, rows: previous?.rows || {} } });
+            taskId = task.id;
+            patchStoryboardMetadata(nodeId, { storyboardVideoBatch: { taskId, status: "running", stage: task.stage, progress: task.progress, rows: previous?.rows || {} } });
             const completed = await waitForGenerationTask(task.id, {
                 initialTask: task,
                 // 默认 storyboard 轮询超时 13 分钟，行级视频批量可能远超，给足 60 分钟。
                 timeoutMs: 60 * 60 * 1000,
-                onTaskUpdate: (next) => patchStoryboardMetadata(nodeId, { storyboardVideoBatch: { taskId: next.id, status: next.status === "succeeded" ? "succeeded" : next.status === "queued" ? "queued" : "running", stage: next.stage, progress: next.progress, rows: previous?.rows || {} } }),
+                onTaskUpdate: (next) => {
+                    progress = next.progress ?? progress;
+                    patchStoryboardMetadata(nodeId, { storyboardVideoBatch: { taskId: next.id, status: next.status === "succeeded" ? "succeeded" : next.status === "queued" ? "queued" : "running", stage: next.stage, progress: next.progress, rows: previous?.rows || {} } });
+                },
             });
             const state = storyboardVideoBatchState(completed, pending, previous?.rows);
             patchStoryboardMetadata(nodeId, { storyboardVideoBatch: state });
@@ -675,10 +698,13 @@ export function useCanvasStoryboard({
             else message.error(state.error || "一键视频任务失败");
         } catch (error) {
             const details = generationErrorMessage(error);
-            patchStoryboardMetadata(nodeId, { storyboardVideoBatch: { taskId: "", status: "failed", error: details, rows: previous?.rows || {} } });
-            message.error(details);
+            // 任务可能还在服务端跑：留 taskId + 保持 running，按钮就不会复原成可重按。
+            // 刷新页面时下面的恢复 effect 会按 taskId 重新挂上轮询。
+            const running = Boolean(taskId) && shouldRetainBatchTaskId(error);
+            patchStoryboardMetadata(nodeId, { storyboardVideoBatch: { taskId: running ? taskId : "", status: running ? "running" : "failed", progress: running ? progress : undefined, error: details, rows: previous?.rows || {} } });
+            message.error(running ? `${details}（服务端任务 ${taskId} 可能仍在渲染，刷新页面可继续跟踪）` : details);
         }
-    }, [message, nodesRef, patchStoryboardMetadata, projectId, storyboardBatchRows]);
+    }, [guardBatchTaskIdle, message, nodesRef, patchStoryboardMetadata, projectId, storyboardBatchRows]);
 
     const generateStoryboardMusicBatch = useCallback(async (nodeId: string) => {
         const rows = storyboardBatchRows(nodeId);
@@ -686,12 +712,15 @@ export function useCanvasStoryboard({
         // 同视频批次：已有配乐的段整组跳过。段是按 musicGroupId 生成的，
         // 丢掉整组不会改变剩余组的时长累计（后端按组累加 rows 的 DurationSeconds）。
         const previous = nodesRef.current.find((node) => node.id === nodeId && node.type === CanvasNodeType.Script)?.metadata?.storyboardMusicBatch;
+        if (previous?.taskId && !await guardBatchTaskIdle(previous.taskId)) return;
         const pending = pendingStoryboardMusicRows(rows, previous?.segments);
         if (!pending.length) return message.info("所有音乐段都已生成");
         patchStoryboardMetadata(nodeId, { storyboardMusicBatch: { taskId: "", status: "running", stage: "正在创建任务", progress: 2, segments: previous?.segments || [] } });
+        let taskId = "";
         try {
             const task = await createStoryboardMusicBatch({ projectId, rows: pending.map(storyboardShotPayload) });
-            patchStoryboardMetadata(nodeId, { storyboardMusicBatch: { taskId: task.id, status: "running", stage: task.stage, progress: task.progress, segments: previous?.segments || [] } });
+            taskId = task.id;
+            patchStoryboardMetadata(nodeId, { storyboardMusicBatch: { taskId, status: "running", stage: task.stage, progress: task.progress, segments: previous?.segments || [] } });
             const completed = await waitForGenerationTask(task.id, {
                 initialTask: task,
                 onTaskUpdate: (next) => patchStoryboardMetadata(nodeId, { storyboardMusicBatch: { taskId: next.id, status: next.status === "succeeded" ? "succeeded" : next.status === "queued" ? "queued" : "running", stage: next.stage, progress: next.progress, segments: previous?.segments || [] } }),
@@ -703,10 +732,11 @@ export function useCanvasStoryboard({
             else message.error("一键音乐任务失败");
         } catch (error) {
             const details = generationErrorMessage(error);
-            patchStoryboardMetadata(nodeId, { storyboardMusicBatch: { taskId: "", status: "failed", error: details, segments: previous?.segments || [] } });
-            message.error(details);
+            const running = Boolean(taskId) && shouldRetainBatchTaskId(error);
+            patchStoryboardMetadata(nodeId, { storyboardMusicBatch: { taskId: running ? taskId : "", status: running ? "running" : "failed", error: details, segments: previous?.segments || [] } });
+            message.error(running ? `${details}（服务端任务 ${taskId} 可能仍在渲染，刷新页面可继续跟踪）` : details);
         }
-    }, [message, nodesRef, patchStoryboardMetadata, projectId, storyboardBatchRows]);
+    }, [guardBatchTaskIdle, message, nodesRef, patchStoryboardMetadata, projectId, storyboardBatchRows]);
 
     const composeStoryboard = useCallback(async (nodeId: string) => {
         const scriptNode = nodesRef.current.find((node) => node.id === nodeId && node.type === CanvasNodeType.Script);
@@ -714,12 +744,14 @@ export function useCanvasStoryboard({
         const videoBatch = scriptNode?.metadata?.storyboardVideoBatch;
         const musicBatch = scriptNode?.metadata?.storyboardMusicBatch;
         if (!scriptNode || rows.length < 2) return message.warning("合成至少需要两个镜头");
+        if (scriptNode.metadata?.storyboardCompose?.taskId && !await guardBatchTaskIdle(scriptNode.metadata.storyboardCompose.taskId)) return;
         const missing = rows.filter((row) => !videoBatch?.rows[row.id]?.videoResourceId);
         if (missing.length) return message.warning(`有 ${missing.length} 个镜头还没有视频，请先一键生成视频`);
         const musicResourceIds = storyboardMusicResourceIds(rows, musicBatch?.segments || []);
         const missingGroups = storyboardMusicGroupIds(rows).filter((groupId) => !musicResourceIds[groupId]);
         if (missingGroups.length) return message.warning(`音乐段 ${missingGroups.join("、")} 还未生成，请先一键生成音乐`);
         patchStoryboardMetadata(nodeId, { storyboardCompose: { taskId: "", status: "running", stage: "正在创建任务", progress: 2 } });
+        let taskId = "";
         try {
             const videoResourceIds: Record<string, string> = {};
             rows.forEach((row, index) => {
@@ -727,6 +759,7 @@ export function useCanvasStoryboard({
                 if (resourceId) videoResourceIds[String(index + 1)] = resourceId;
             });
             const task = await createStoryboardCompose({ projectId, rows: rows.map(storyboardShotPayload), videoResourceIds, musicResourceIds });
+            taskId = task.id;
             patchStoryboardMetadata(nodeId, { storyboardCompose: { taskId: task.id, status: "running", stage: task.stage, progress: task.progress } });
             const completed = await waitForGenerationTask(task.id, {
                 initialTask: task,
@@ -742,10 +775,11 @@ export function useCanvasStoryboard({
             }
         } catch (error) {
             const details = generationErrorMessage(error);
-            patchStoryboardMetadata(nodeId, { storyboardCompose: { taskId: "", status: "failed", error: details } });
-            message.error(details);
+            const running = Boolean(taskId) && shouldRetainBatchTaskId(error);
+            patchStoryboardMetadata(nodeId, { storyboardCompose: { taskId: running ? taskId : "", status: running ? "running" : "failed", error: details } });
+            message.error(running ? `${details}（服务端任务 ${taskId} 可能仍在渲染，刷新页面可继续跟踪）` : details);
         }
-    }, [message, nodesRef, patchStoryboardMetadata, projectId, storyboardBatchRows]);
+    }, [guardBatchTaskIdle, message, nodesRef, patchStoryboardMetadata, projectId, storyboardBatchRows]);
 
     // 重整后恢复批次轮询：批次状态是持久化的，但轮询只活在点击 handler 的
     // async 闭包里，F5 就没有人再去查那个 taskId —— 进度条会永远停在 "生成中 x%"，
@@ -859,6 +893,7 @@ function storyboardShotPayload(row: StoryboardRow): StoryboardShotPayload {
         optionalDetails: row.optionalDetails,
         continuityOut: row.continuityOut,
         characterIds: (row.characters || []).map((item) => item.characterAssetId).filter((value): value is string => Boolean(value)),
+        shotNumber: row.shotNumber,
     };
 }
 
@@ -869,6 +904,30 @@ function storyboardMusicGroupIds(rows: StoryboardRow[]) {
 // 已出片的镜头不再重排队：h3 一镜约 12 分钟，整批重跑是按行数乘进去的 GPU 浪费。
 export function pendingStoryboardVideoRows(rows: StoryboardRow[], previous?: StoryboardVideoBatchState["rows"]) {
     return rows.filter((row) => !previous?.[row.id]?.videoResourceId);
+}
+
+// GET /tasks/:id 对不存在的任务回 404（routes.go 的 fail(c, http.StatusNotFound, err)），
+// 这是唯一能证明"服务端确实没有这个任务"的信号；其余错误（超时/断网/5xx）都不能。
+function isMissingTaskError(error: unknown) {
+    return error instanceof ApiError && error.status === 404;
+}
+
+/**
+ * 轮询抛错后还该不该留着 taskId。
+ * 判据只有一条：有没有证据表明服务端的活已经干完了。没有就留着 —— 留着最坏是按钮多灰
+ * 一次，清掉则是一次重复烧 GPU（P0-4）。
+ */
+export function shouldRetainBatchTaskId(error: unknown) {
+    // 轮询窗口到期：只是客户端不等了，GPU 很可能还在跑。
+    if (error instanceof TaskWaitTimeoutError) return true;
+    // 页面跳转/卸载同理：Abort 只停监听，不取消上游任务。
+    if (error instanceof DOMException && error.name === "AbortError") return true;
+    return !isMissingTaskError(error);
+}
+
+// 闸门判定：只有后端明确说"查无此任务"或任务已终态，才允许再次提交。
+export function batchTaskStillActive(task?: GenerationTask) {
+    return task?.status === "queued" || task?.status === "running";
 }
 
 // 配乐按 musicGroupId 成段生成，已有配乐的段整组跳过（丢整组不改变剩余组的时长累计）。

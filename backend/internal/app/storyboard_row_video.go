@@ -395,7 +395,14 @@ func (c *gatewayClient) SynthesizeSpeech(ctx context.Context, voiceID string, te
 		URL             string  `json:"url"`
 		DurationSeconds float64 `json:"duration_seconds"`
 	}{}
-	if err := c.getGatewayJSON(ctx, http.MethodPost, "/v1/audio/speech", map[string]any{"model": voiceID, "input": text, "speed": speed}, &payload); err != nil {
+	// 网关按 model 字段选引擎（compat_openai._is_qwen）：只有 qwen* 才走 tts_qwen，
+	// 别的名字一律落到 CosyVoice —— 而 CosyVoice 在本机缺 torch 起不来，行视频必然 TTS 失败。
+	// 说话人名走 voice 字段，tts_qwen 的 --voice 才拿得到它。
+	body := map[string]any{"model": "qwen3-tts", "input": text, "speed": speed}
+	if strings.TrimSpace(voiceID) != "" {
+		body["voice"] = voiceID
+	}
+	if err := c.getGatewayJSON(ctx, http.MethodPost, "/v1/audio/speech", body, &payload); err != nil {
 		return rowVideoSpeech{}, err
 	}
 	if strings.TrimSpace(payload.URL) == "" {

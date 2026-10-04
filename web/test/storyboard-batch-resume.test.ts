@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
-import { pendingStoryboardMusicRows, pendingStoryboardVideoRows } from "../src/pages/canvas/use-canvas-storyboard";
+import { batchTaskStillActive, pendingStoryboardMusicRows, pendingStoryboardVideoRows, shouldRetainBatchTaskId } from "../src/pages/canvas/use-canvas-storyboard";
+import { ApiError } from "../src/services/api/request";
+import { TaskWaitTimeoutError, type GenerationTask } from "../src/services/api/task-center";
 import type { StoryboardRow } from "../src/types/canvas";
 
 function row(id: string, musicGroupId?: string): StoryboardRow {
@@ -48,5 +50,47 @@ describe("pendingStoryboardMusicRows", () => {
     test("缺省段名 seg-01 与后端一致", () => {
         const rows = [row("a"), row("b")];
         expect(pendingStoryboardMusicRows(rows, [{ musicGroupId: "seg-01", resourceId: "res-1" }])).toHaveLength(0);
+    });
+});
+
+function task(status: string): GenerationTask {
+    return { id: "t1", type: "storyboard_video_batch", status, prompt: "" } as unknown as GenerationTask;
+}
+
+describe("shouldRetainBatchTaskId", () => {
+    // P0-4：清掉 taskId ＝ 按钮复原 ＝ 用户一按就重复烧 GPU。
+    test("轮询超时必须留住 taskId（GPU 还在跑）", () => {
+        expect(shouldRetainBatchTaskId(new TaskWaitTimeoutError("任务执行超时，请稍后重试"))).toBe(true);
+    });
+
+    test("页面跳转的 AbortError 也留住（Abort 不取消上游任务）", () => {
+        expect(shouldRetainBatchTaskId(new DOMException("Aborted", "AbortError"))).toBe(true);
+    });
+
+    test("后端 404 = 查无此任务，可以放开重试", () => {
+        expect(shouldRetainBatchTaskId(new ApiError("not found", { status: 404 }))).toBe(false);
+    });
+
+    test("任务自身失败：留 id 无害，重按闸门会按终态放行", () => {
+        expect(shouldRetainBatchTaskId(new Error("任务失败"))).toBe(true);
+    });
+
+    test("断网/5xx 一律按『可能还在跑』处理（失败方向也要安全）", () => {
+        expect(shouldRetainBatchTaskId(new ApiError("bad gateway", { status: 502 }))).toBe(true);
+        expect(shouldRetainBatchTaskId(new TypeError("failed to fetch"))).toBe(true);
+    });
+});
+
+describe("batchTaskStillActive", () => {
+    test("排队中与运行中都算还活着，挡住重复提交", () => {
+        expect(batchTaskStillActive(task("queued"))).toBe(true);
+        expect(batchTaskStillActive(task("running"))).toBe(true);
+    });
+
+    test("终态放行：任务已经不在服务端跑了，重按安全", () => {
+        expect(batchTaskStillActive(task("succeeded"))).toBe(false);
+        expect(batchTaskStillActive(task("failed"))).toBe(false);
+        expect(batchTaskStillActive(task("cancelled"))).toBe(false);
+        expect(batchTaskStillActive(undefined)).toBe(false);
     });
 });

@@ -164,6 +164,28 @@ type AssetRepresentation struct {
 	CreatedAt      time.Time `json:"createdAt"`
 }
 
+// QwenVoiceKeys 是网关 Qwen3-TTS（mlx-audio 预置说话人）的全集，取自
+// mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-bf16 的 config.json talker_config.spk_id。
+// 这串 key 会原样作为 voice 参数送进 MediaGateway 的 voice 阶段
+// （server/workers/tts_qwen.py 的 --voice，改一个字符即失配）。
+// 曾经这里用的是 OpenAI 音色名（alloy/nova/…），与该集合交集为空，
+// 等于每个角色都拿不到可播报的绑定。
+var QwenVoiceKeys = []string{"vivian", "serena", "ono_anna", "sohee", "uncle_fu", "ryan", "aiden", "eric", "dylan"}
+
+// QwenVoiceDialects 只收录模型 talker_config.spk_is_dialect 标出的说话人，其余为通用音色。
+var QwenVoiceDialects = map[string]string{"eric": "四川方言", "dylan": "北京方言"}
+
+// QwenVoiceDisplayName 把 spk_id 的下划线音节转成展示用标题：ono_anna → Ono Anna。
+func QwenVoiceDisplayName(key string) string {
+	parts := strings.Split(key, "_")
+	for index, part := range parts {
+		if part != "" {
+			parts[index] = strings.ToUpper(part[:1]) + part[1:]
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
 // VoiceProfile 是可复用的声音身份；试听音频只是表现资源，不等同于声音本身。
 type VoiceProfile struct {
 	ID                   string    `json:"id" gorm:"primaryKey;size:36"`

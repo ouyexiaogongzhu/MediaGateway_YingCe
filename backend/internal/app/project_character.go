@@ -92,17 +92,27 @@ type ProjectCharacterDetail struct {
 	Character CharacterCardSummary `json:"character"`
 }
 
-var builtinVoiceNames = []string{"alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer", "verse", "marin", "cedar"}
-
-func (s *Service) ListVoiceProfiles(userID string) ([]VoiceProfileSummary, error) {
+// builtinVoiceProfiles 是网关真正接受的预置音色全集（model.QwenVoiceKeys）。
+// 幂等：EnsureVoiceProfiles 按 (user_id, provider, voice_key) 冲突跳过，
+// 重复调用只会补齐新用户，老用户的自定义绑定不受影响。
+func builtinVoiceProfiles(userID string) []model.VoiceProfile {
 	now := time.Now()
-	profiles := make([]model.VoiceProfile, 0, len(builtinVoiceNames))
-	for _, key := range builtinVoiceNames {
+	profiles := make([]model.VoiceProfile, 0, len(model.QwenVoiceKeys))
+	for _, key := range model.QwenVoiceKeys {
+		timbre := "通用音色"
+		if dialect, ok := model.QwenVoiceDialects[key]; ok {
+			timbre = dialect
+		}
 		profiles = append(profiles, model.VoiceProfile{
-			ID: newID(), UserID: userID, Name: strings.ToUpper(key[:1]) + key[1:], Provider: "openai_compatible", VoiceKey: key,
-			Language: "多语言", CompatibleModelsJSON: "[]", Status: "active", CreatedAt: now, UpdatedAt: now,
+			ID: newID(), UserID: userID, Name: model.QwenVoiceDisplayName(key), Provider: "qwen3_tts", VoiceKey: key,
+			Language: "多语言", Timbre: timbre, CompatibleModelsJSON: "[]", Status: "active", CreatedAt: now, UpdatedAt: now,
 		})
 	}
+	return profiles
+}
+
+func (s *Service) ListVoiceProfiles(userID string) ([]VoiceProfileSummary, error) {
+	profiles := builtinVoiceProfiles(userID)
 	if err := s.repo.EnsureVoiceProfiles(profiles); err != nil {
 		return nil, err
 	}

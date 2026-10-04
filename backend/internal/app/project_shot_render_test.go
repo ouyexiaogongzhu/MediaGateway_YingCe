@@ -55,10 +55,37 @@ func (f *fakeGateway) handler(t *testing.T) http.Handler {
 					status = "failed"
 				}
 			}
-			f.photos = append(f.photos, map[string]any{"id": id, "type": body.Type, "status": status, "params": body.Params})
+			f.photos = append(f.photos, map[string]any{"id": id, "type": body.Type, "status": status, "params": body.Params, "path": r.URL.Path})
 			f.mu.Unlock()
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = fmt.Fprintf(w, `{"id":%q,"status":%q}`, id, status)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/concat":
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode concat body: %v", err)
+				http.Error(w, "bad body", http.StatusBadRequest)
+				return
+			}
+			f.mu.Lock()
+			f.photos = append(f.photos, map[string]any{"id": "concat-1", "type": "concat", "status": "queued", "params": body, "path": r.URL.Path})
+			f.mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":"concat-1","job_id":"concat-1","status":"queued"}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/music":
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode music body: %v", err)
+				http.Error(w, "bad body", http.StatusBadRequest)
+				return
+			}
+			f.mu.Lock()
+			f.photos = append(f.photos, map[string]any{"id": "music-1", "type": "music", "status": "completed", "params": body})
+			f.mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"url":%q,"duration_seconds":%v}`, "http://"+r.Host+"/music.wav", body["duration_s"])
+		case r.Method == http.MethodGet && r.URL.Path == "/music.wav":
+			w.Header().Set("Content-Type", "audio/wav")
+			_, _ = w.Write([]byte("RIFF-fake-music"))
 		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/jobs/"):
 			id := strings.TrimPrefix(r.URL.Path, "/v1/jobs/")
 			f.mu.Lock()
@@ -115,6 +142,33 @@ func (f *fakeGateway) submitted(t *testing.T, jobType string) []map[string]any {
 	return result
 }
 
+// submittedAt 是 submitted 加上 endpoint 断言。submitted() 只按 job type 找记录，
+// 而 /v1/jobs 的 stub 也会把 {"type":"concat","params":{...}} 记成 type=concat ——
+// 两者形状相同，光看 payload 分不出走的哪条路由。要卡住"成片走 /v1/concat 而不是
+// /v1/jobs"必须比对 path。
+func (f *fakeGateway) submittedAt(t *testing.T, jobType, path string) []map[string]any {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var result []map[string]any
+	for _, entry := range f.photos {
+		if entry["type"] == jobType && entry["path"] == path {
+			params, _ := entry["params"].(map[string]any)
+			result = append(result, params)
+		}
+	}
+	if len(result) == 0 {
+		var seen []string
+		for _, entry := range f.photos {
+			if entry["type"] == jobType {
+				seen = append(seen, fmt.Sprintf("%v", entry["path"]))
+			}
+		}
+		t.Fatalf("%s jobs via %s = 0, want >=1 (实际提交到: %v)", jobType, path, seen)
+	}
+	return result
+}
+
 func newRenderAllTestService(t *testing.T, aspectRatio ...string) (*Service, *fakeGateway) {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+newID()+"?mode=memory&cache=shared"), &gorm.Config{})
@@ -137,7 +191,7 @@ func newRenderAllTestService(t *testing.T, aspectRatio ...string) (*Service, *fa
 	}
 	revisions := []model.ShotRevision{
 		{ID: "rev-1", ShotID: "shot-1", Version: 1, PlotDescription: "雨夜开场", Dialogue: "谁在那里？", DurationMs: 4000, ImagePrompt: "雨夜街道", VideoPrompt: "镜头推进", CreatedAt: now},
-		{ID: "rev-2", ShotID: "shot-2", Version: 1, PlotDescription: "主角奔跑", DurationMs: 5000, VideoPrompt: "跟随奔跑", CreatedAt: now},
+		{ID: "rev-2", ShotID: "shot-2", Version: 1, PlotDescription: "主角奔跑", DurationMs: 5000, ImagePrompt: "追逐街道", VideoPrompt: "跟随奔跑", CreatedAt: now},
 	}
 	for index := range shots {
 		if err := db.Create(&shots[index]).Error; err != nil {
@@ -195,18 +249,41 @@ func TestRenderAllProjectShotsChainsLastFrameAndRegistersFinal(t *testing.T) {
 	if len(result.VoiceSkippedShotIDs) != 1 || result.VoiceSkippedShotIDs[0] != "shot-1" {
 		t.Fatalf("voiceSkippedShotIds = %v, want [shot-1]", result.VoiceSkippedShotIDs)
 	}
-	music := shotJobs[0]["music"].(map[string]any)
-	if music["prompt"] != "紧张配乐" || music["duration_s"] != float64(4) {
-		t.Fatalf("first shot music = %v", music)
+	// 配乐改成成片级：逐镜不再各带一段，否则与 concat 的 music_segments 叠音。
+	for index, params := range shotJobs {
+		if music, hasMusic := params["music"]; hasMusic {
+			t.Fatalf("shot %d 不应再带 music 段：%v", index, music)
+		}
+	}
+	musicReqs := gateway.submitted(t, "music")
+	// 成片 9s < Gateway /v1/music 的下限 10s：不 clamp 的话网关直接 400，
+	// 而 render-all 把它变成一个不透出原因的 500（真机跑出来的）。
+	if len(musicReqs) != 1 || musicReqs[0]["prompt"] != "紧张配乐" || musicReqs[0]["duration_s"] != float64(10) {
+		t.Fatalf("成片配乐请求 = %v, want 1 条 10s（9s 成片 clamp 到下限）", musicReqs)
 	}
 
-	concatJobs := gateway.submitted(t, "concat")
+	concatJobs := gateway.submittedAt(t, "concat", "/v1/concat")
 	if len(concatJobs) != 1 {
 		t.Fatalf("concat jobs = %d, want 1", len(concatJobs))
 	}
 	paths, _ := concatJobs[0]["shots"].([]any)
 	if len(paths) != 2 || paths[0] != result.Shots[0].VideoPath || paths[1] != result.Shots[1].VideoPath {
 		t.Fatalf("concat shots = %v, want rendered video paths in order", paths)
+	}
+	segments, _ := concatJobs[0]["music_segments"].([]any)
+	if len(segments) != 1 {
+		t.Fatalf("concat music_segments = %v, want 1 段", concatJobs[0]["music_segments"])
+	}
+	segment, _ := segments[0].(map[string]any)
+	wavPath, _ := segment["path"].(string)
+	if wavPath == "" {
+		t.Fatalf("concat music segment path = %v", segment)
+	}
+	if _, statErr := os.Stat(wavPath); statErr != nil {
+		t.Fatalf("配乐 wav 应已下载到本地：%v", statErr)
+	}
+	if concatJobs[0]["bgm_gain_db"] != renderAllBgmGainDB {
+		t.Fatalf("concat bgm_gain_db = %v, want %v", concatJobs[0]["bgm_gain_db"], renderAllBgmGainDB)
 	}
 	if result.ConcatJobID == "" || result.FinalResourceID == "" {
 		t.Fatalf("concatJobId=%q finalResourceId=%q, want both set", result.ConcatJobID, result.FinalResourceID)
@@ -360,4 +437,45 @@ func aspectRatioValue(values []string) string {
 		return ""
 	}
 	return values[0]
+}
+
+// 草稿是纯 h3 快档，全程无音乐：不调 /v1/music、逐镜不带 music 段、成片也不铺。
+func TestRenderAllProjectShotsDraftStaysMusicFree(t *testing.T) {
+	service, gateway := newRenderAllTestService(t)
+	if _, err := service.RenderAllProjectShots(context.Background(), "user-render", "project-render", RenderAllShotsRequest{MusicPrompt: "紧张配乐", Draft: true}); err != nil {
+		t.Fatal(err)
+	}
+	if len(gateway.submitted(t, "music")) != 0 {
+		t.Fatal("草稿不应生成配乐")
+	}
+	for index, params := range gateway.submitted(t, "shot") {
+		if music, hasMusic := params["music"]; hasMusic {
+			t.Fatalf("草稿 shot %d 不应有 music 段：%v", index, music)
+		}
+	}
+	concatJobs := gateway.submittedAt(t, "concat", "/v1/concat")
+	if len(concatJobs) != 1 {
+		t.Fatalf("concat jobs = %d, want 1", len(concatJobs))
+	}
+	if segments, hasSegments := concatJobs[0]["music_segments"]; hasSegments {
+		t.Fatalf("草稿成片不应带 music_segments：%v", segments)
+	}
+}
+
+// 只渲一个镜头时没有成片可铺，逐镜自带配乐必须留着（RenderProjectShot 走同一条路）。
+func TestRenderAllProjectShotsSingleShotKeepsShotMusic(t *testing.T) {
+	service, gateway := newRenderAllTestService(t)
+	if _, err := service.RenderAllProjectShots(context.Background(), "user-render", "project-render", RenderAllShotsRequest{MusicPrompt: "紧张配乐", FromShotID: "shot-2"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(gateway.submitted(t, "concat")) != 0 {
+		t.Fatal("单镜头不应提交 concat")
+	}
+	if len(gateway.submitted(t, "music")) != 0 {
+		t.Fatal("单镜头不应额外生成成片配乐")
+	}
+	music, ok := gateway.submitted(t, "shot")[0]["music"].(map[string]any)
+	if !ok || music["prompt"] != "紧张配乐" || music["duration_s"] != float64(5) {
+		t.Fatalf("单镜头应保留逐镜 music 段：%v", music)
+	}
 }

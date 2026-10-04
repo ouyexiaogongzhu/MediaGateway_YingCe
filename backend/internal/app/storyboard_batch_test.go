@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -18,13 +19,57 @@ import (
 
 // fakeBatchStore 模拟子任务队列与 worker 领取：创建即按配置落到终态，不打真库。
 type fakeBatchStore struct {
-	createErrs map[int]error            // 行下标 → 创建失败
-	outcomes   map[int]model.TaskStatus // 行下标 → 子任务终态
-	created    []StoryboardRowVideoTaskRequest
-	progress   []int
-	stages     []string
-	seq        int
-	tasks      map[string]*model.Task
+	createErrs  map[int]error            // 行下标 → 创建失败
+	outcomes    map[int]model.TaskStatus // 行下标 → 子任务终态
+	created     []StoryboardRowVideoTaskRequest
+	progress    []int
+	stages      []string
+	seq         int
+	tasks       map[string]*model.Task
+	activeLimit int  // >0 时模拟活动任务上限（父任务 + 子任务共用）
+	autoFinish  bool // ChildTask 读到未终态子任务时替 worker 收尾，避免测试自旋
+	waits       int  // WaitForChildSlot 实际调用次数
+	completed   int  // 名额等待期间被 worker 跑完的子任务数
+}
+
+// WaitForChildSlot 同 ActiveTaskCountForUser 口径：父任务占 1 个名额，满了就让最老的子任务跑完腾位。
+func (f *fakeBatchStore) WaitForChildSlot(ctx context.Context) error {
+	f.waits++
+	if f.activeLimit <= 0 {
+		return ctx.Err() // 不限名额：立刻放行
+	}
+	for f.activeTaskCount() >= int64(f.activeLimit) {
+		oldest := ""
+		for _, task := range f.tasks {
+			if storyboardTaskTerminal(task.Status) {
+				continue
+			}
+			if oldest == "" || task.ID < oldest {
+				oldest = task.ID
+			}
+		}
+		if oldest == "" {
+			return errors.New("模拟队列没有可完成的子任务")
+		}
+		f.finish(f.tasks[oldest])
+	}
+	return nil
+}
+
+func (f *fakeBatchStore) activeTaskCount() int64 {
+	active := int64(1) // 父任务自己
+	for _, task := range f.tasks {
+		if !storyboardTaskTerminal(task.Status) {
+			active++
+		}
+	}
+	return active
+}
+
+func (f *fakeBatchStore) finish(task *model.Task) {
+	task.Status = model.TaskStatusSucceeded
+	task.ResultJSON = fmt.Sprintf(`{"videoResourceId":"res-%s"}`, task.ID)
+	f.completed++
 }
 
 func (f *fakeBatchStore) CreateRowVideoTask(req StoryboardRowVideoTaskRequest) (*model.Task, error) {
@@ -32,6 +77,10 @@ func (f *fakeBatchStore) CreateRowVideoTask(req StoryboardRowVideoTaskRequest) (
 	f.created = append(f.created, req)
 	if err, ok := f.createErrs[index]; ok {
 		return nil, err
+	}
+	// 真接口在配额满时直接拒；fake 照抄，否则「等名额」这条修复根本测不出来。
+	if f.activeLimit > 0 && f.activeTaskCount() >= int64(f.activeLimit) {
+		return nil, fmt.Errorf("同时排队或运行的任务最多 %d 个", f.activeLimit)
 	}
 	f.seq++
 	task := &model.Task{ID: fmt.Sprintf("child-%d", f.seq), Status: model.TaskStatusQueued}
@@ -56,6 +105,9 @@ func (f *fakeBatchStore) ChildTask(id string) (*model.Task, error) {
 	if !ok {
 		return nil, fmt.Errorf("task %s not found", id)
 	}
+	if f.autoFinish && !storyboardTaskTerminal(task.Status) {
+		f.finish(task)
+	}
 	return task, nil
 }
 
@@ -65,8 +117,142 @@ func (f *fakeBatchStore) UpdateBatchProgress(stage string, progress int) error {
 	return nil
 }
 
+// batchTestInput 走「客户端不带 shotNumber」的旧路径：镜头号退回下标+1。
 func batchTestInput(rows ...agentStoryboardShot) storyboardVideoBatchInput {
-	return storyboardVideoBatchInput{ProjectID: "proj-1", Rows: rows, Width: 1280, Height: 720}
+	wrapped := make([]storyboardBatchShotRow, 0, len(rows))
+	for _, row := range rows {
+		wrapped = append(wrapped, batchRow(row, 0))
+	}
+	return storyboardVideoBatchInput{ProjectID: "proj-1", Rows: wrapped, Width: 1280, Height: 720}
+}
+
+// batchRow 带显式镜头号的行：模拟前端只送未出片的那几行。
+func batchRow(row agentStoryboardShot, shotNumber int) storyboardBatchShotRow {
+	return storyboardBatchShotRow{agentStoryboardShot: row, ShotNumber: shotNumber}
+}
+
+// 20 行撞上「父任务 + 4 子任务」的上限时，剩下的行要等名额，不能被配额拒掉后静默消失。
+func TestRunStoryboardVideoBatchQueuesBeyondActiveLimit(t *testing.T) {
+	store := &fakeBatchStore{activeLimit: 3, autoFinish: true}
+	rows := make([]storyboardBatchShotRow, 0, 10)
+	for i := 1; i <= 10; i++ {
+		rows = append(rows, batchRow(agentStoryboardShot{Title: fmt.Sprintf("镜%d", i), Duration: 3, Motion: "推镜"}, i))
+	}
+	input := storyboardVideoBatchInput{ProjectID: "proj-1", Rows: rows, Width: 1280, Height: 720}
+
+	results, err := runStoryboardVideoBatch(context.Background(), store, input)
+	if err != nil {
+		t.Fatalf("行数超过配额上限不应让父任务失败：%v", err)
+	}
+	if store.seq != 10 || len(results) != 10 {
+		t.Fatalf("10 行必须全部入队，实际入队 %d 行、返回 %d 行", store.seq, len(results))
+	}
+	if store.waits != 10 {
+		t.Fatalf("每行建任务前都应等名额，实际等待 %d 次", store.waits)
+	}
+	// 上限 3 = 父任务 1 + 子任务 2，第 3 个子任务之后每次都要先跑完一个腾位。
+	if store.completed < 8 {
+		t.Fatalf("名额轮转次数过少，说明只是并发建队没有真正排队：%d", store.completed)
+	}
+	if countStoryboardBatchSucceeded(results) != 10 {
+		t.Fatalf("全部行都应跑完：%+v", results)
+	}
+	for index, result := range results {
+		if result.ShotNumber != index+1 || result.VideoResourceID == "" {
+			t.Fatalf("第 %d 行结果错位：%+v", index+1, result)
+		}
+	}
+}
+
+// 只送未出片的行时，镜头号必须用前端 row.shotNumber，首帧资源按同一个真值对齐。
+func TestRunStoryboardVideoBatchKeepsShotNumbers(t *testing.T) {
+	store := &fakeBatchStore{outcomes: map[int]model.TaskStatus{0: model.TaskStatusSucceeded, 1: model.TaskStatusSucceeded, 2: model.TaskStatusSucceeded}}
+	input := storyboardVideoBatchInput{
+		ProjectID:             "proj-1",
+		FirstFrameResourceIDs: map[int]string{7: "res-frame-7"},
+		Width:                 1280, Height: 720,
+		Rows: []storyboardBatchShotRow{
+			batchRow(agentStoryboardShot{Title: "镜三", Duration: 3}, 3),
+			batchRow(agentStoryboardShot{Title: "镜四", Duration: 4}, 4),
+			batchRow(agentStoryboardShot{Title: "镜七", Duration: 5}, 7),
+		},
+	}
+
+	results, err := runStoryboardVideoBatch(context.Background(), store, input)
+	if err != nil {
+		t.Fatalf("批次不应失败：%v", err)
+	}
+	for index, want := range []int{3, 4, 7} {
+		if results[index].ShotNumber != want {
+			t.Fatalf("第 %d 行镜头号应保持 %d，实际 %d", index+1, want, results[index].ShotNumber)
+		}
+	}
+	if store.created[2].FirstFrameResourceID != "res-frame-7" {
+		t.Fatalf("镜头号 7 的首帧资源应透传给子任务，实际 %q", store.created[2].FirstFrameResourceID)
+	}
+	if store.created[0].FirstFrameResourceID != "" || store.created[1].FirstFrameResourceID != "" {
+		t.Fatalf("无首帧的行不应串号：%+v", store.created)
+	}
+}
+
+func TestCreateStoryboardVideoBatchTaskRejectsDuplicateShotNumbers(t *testing.T) {
+	_, err := (&Service{}).CreateStoryboardVideoBatchTask("user-1", StoryboardVideoBatchRequest{
+		ProjectID: "proj-1",
+		Rows: []storyboardBatchShotRow{
+			batchRow(agentStoryboardShot{Title: "镜一", Duration: 3}, 1),
+			batchRow(agentStoryboardShot{Title: "镜一", Duration: 3}, 1),
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "shotNumber 重复") {
+		t.Fatalf("重复镜头号应在入队前被拒，实际 %v", err)
+	}
+}
+
+// 客户端不带画幅时按项目 aspectRatio 推导；前端目前就是不带画幅发起的（storyboard-batch.ts），
+// 不推导整批会落 Gateway /v1/videos 缺省 864x480，竖屏项目静默出横屏。
+func TestCreateStoryboardVideoBatchTaskDerivesSizeFromProjectAspectRatio(t *testing.T) {
+	s, db, _, _ := creationTestService(t)
+	for _, project := range []*model.Project{
+		{ID: "proj-vertical", UserID: "user", Name: "竖屏短剧", AspectRatio: "9:16"},
+		{ID: "proj-no-ratio", UserID: "user", Name: "未定画幅", AspectRatio: ""},
+	} {
+		if err := db.Create(project).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, tc := range []struct {
+		name                 string
+		projectID            string
+		width, height        int
+		wantWidth, wantHeigh int
+	}{
+		{name: "竖屏项目按 aspectRatio 推导", projectID: "proj-vertical", wantWidth: 480, wantHeigh: 864},
+		{name: "画幅未知退回 Gateway 缺省横屏", projectID: "proj-no-ratio", wantWidth: 864, wantHeigh: 480},
+		{name: "项目取不到就原样入队", projectID: "proj-missing", wantWidth: 0, wantHeigh: 0},
+		{name: "请求显式带画幅时不覆盖", projectID: "proj-vertical", width: 1280, height: 720, wantWidth: 1280, wantHeigh: 720},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			created, err := s.CreateStoryboardVideoBatchTask("user", StoryboardVideoBatchRequest{
+				ProjectID: tc.projectID, Width: tc.width, Height: tc.height,
+				Rows: []storyboardBatchShotRow{batchRow(agentStoryboardShot{Title: "镜一", Duration: 3}, 1)},
+			})
+			if err != nil {
+				t.Fatalf("建批任务不应失败：%v", err)
+			}
+			stored, err := s.repo.Task(created.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var input storyboardVideoBatchInput
+			if err := json.Unmarshal([]byte(stored.InputJSON), &input); err != nil {
+				t.Fatalf("解析任务输入失败：%v", err)
+			}
+			if input.Width != tc.wantWidth || input.Height != tc.wantHeigh {
+				t.Fatalf("画幅应落 %dx%d，实际 %dx%d", tc.wantWidth, tc.wantHeigh, input.Width, input.Height)
+			}
+		})
+	}
 }
 
 func TestRunStoryboardVideoBatchPartialFailure(t *testing.T) {

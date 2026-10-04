@@ -63,6 +63,11 @@ type RenderedShotResult struct {
 
 const renderAllShotTempPrefix = "canvas-shot-ref-"
 
+// renderAllBgmGainDB 成片配乐的增益。concat 的 music_segments 走 render.bgm，
+// 与原音轨 amix(normalize=0)，所以这档就是成片里配乐的实际音量。
+// −16.5dB 等于 shot worker mix.music_volume 0.15 的逐镜配乐音量；改了这里要同步那边。
+const renderAllBgmGainDB = -16.5
+
 func (s *Service) RenderAllProjectShots(ctx context.Context, userID string, projectID string, req RenderAllShotsRequest) (*RenderAllShotsResult, error) {
 	project, err := s.activeProjectForUser(userID, projectID)
 	if err != nil {
@@ -107,6 +112,28 @@ func (s *Service) RenderAllProjectShots(ctx context.Context, userID string, proj
 	var concatPaths []string
 	var totalDurationMs int64
 	for index := start; index < len(shots); index++ {
+		totalDurationMs += shots[index].DurationMs
+	}
+	// 配乐走成片级：整条片子生成一段、在 concat 段铺满，与分镜批量合成同一套做法
+	// （同一份 concatMusicSegment / /v1/concat music_segments）。
+	// 逐镜各生成一段会 N 次生成、每到剪辑点重起；而 render.bgm 是与原音轨 amix 叠加的，
+	// 不先摘掉逐镜的 music 段，成片就会铺两遍。摘了才铺＝与批量路径同一形状。
+	// 单镜头不 concat，保留逐镜自带配乐（RenderProjectShot 走的那条路也照旧）。
+	var musicSegments []concatMusicSegment
+	if musicPrompt := strings.TrimSpace(req.MusicPrompt); musicPrompt != "" && !req.Draft && len(shots)-start >= 2 {
+		// 开拍前生成：配乐失败要早于几小时 GPU 暴露，别等镜头全渲完才发现。
+		// 时长必须 clamp 到 Gateway /v1/music 的 [10,600]（compat_openai.py:528），
+		// 否则总时长不足 10 秒的片子（测试片、短片段）会被网关 400 掉，
+		// 而这里会把它变成一个看不出原因的 500 —— 一个镜头都还没渲。
+		// 向上 clamp 无损：render.bgm 用 aloop+atrim 按成片实际时长裁。
+		track, musicErr := gateway.CreateMusicTrack(ctx, musicPrompt, clampMusicSeconds(int(totalDurationMs/1000)))
+		if musicErr != nil {
+			return nil, fmt.Errorf("生成成片配乐失败：%w", musicErr)
+		}
+		musicSegments = []concatMusicSegment{{Path: track.WavPath, DurationS: track.DurationSeconds}}
+		req.MusicPrompt = ""
+	}
+	for index := start; index < len(shots); index++ {
 		shot := shots[index]
 		rendered, lastFramePath, voiceSkipped, renderErr := s.renderProjectShot(ctx, gateway, userID, projectID, &shot, previousLastFrame, referencesByShot[shot.ID], req)
 		if renderErr != nil {
@@ -130,16 +157,15 @@ func (s *Service) RenderAllProjectShots(ctx context.Context, userID string, proj
 		result.Shots = append(result.Shots, rendered)
 		previousLastFrame = lastFramePath
 		concatPaths = append(concatPaths, rendered.VideoPath)
-		totalDurationMs += shot.DurationMs
 	}
 
 	// 单镜头无需拼接；成片登记为素材库 Resource。
 	if len(concatPaths) >= 2 {
-		job, err := gateway.createJob(ctx, "concat", map[string]any{"shots": concatPaths, "output_name": "render-all-final.mp4"})
+		jobID, err := gateway.CreateConcatJob(ctx, concatJobRequest{Shots: concatPaths, MusicSegments: musicSegments, BgmGainDB: renderAllBgmGainDB})
 		if err != nil {
 			return nil, fmt.Errorf("提交成片拼接失败：%w", err)
 		}
-		job, err = gateway.wait(ctx, job.ID)
+		job, err := gateway.wait(ctx, jobID)
 		if err != nil {
 			return nil, fmt.Errorf("成片拼接失败：%w", err)
 		}

@@ -33,12 +33,27 @@ const (
 
 // --- 请求与落库输入 ---
 
+// storyboardBatchShotRow 是一键视频的行载荷。shotNumber 是分镜行真值：
+// 前端只送「还没出片的行」，用数组下标+1 当镜头号会和画布上的 row.shotNumber 错位。
+// 老调用方不带这个字段时退回下标+1，行为不变。
+type storyboardBatchShotRow struct {
+	agentStoryboardShot
+	ShotNumber int `json:"shotNumber,omitempty"`
+}
+
+func storyboardBatchShotNumber(row storyboardBatchShotRow, index int) int {
+	if row.ShotNumber > 0 {
+		return row.ShotNumber
+	}
+	return index + 1
+}
+
 type StoryboardVideoBatchRequest struct {
-	ProjectID             string                `json:"projectId"`
-	Rows                  []agentStoryboardShot `json:"rows"`
-	FirstFrameResourceIDs map[int]string        `json:"firstFrameResourceIds"`
-	Width                 int                   `json:"width"`
-	Height                int                   `json:"height"`
+	ProjectID             string                   `json:"projectId"`
+	Rows                  []storyboardBatchShotRow `json:"rows"`
+	FirstFrameResourceIDs map[int]string           `json:"firstFrameResourceIds"`
+	Width                 int                      `json:"width"`
+	Height                int                      `json:"height"`
 }
 
 type StoryboardMusicBatchRequest struct {
@@ -55,11 +70,11 @@ type StoryboardComposeRequest struct {
 }
 
 type storyboardVideoBatchInput struct {
-	ProjectID             string                `json:"projectId"`
-	Rows                  []agentStoryboardShot `json:"rows"`
-	FirstFrameResourceIDs map[int]string        `json:"firstFrameResourceIds"`
-	Width                 int                   `json:"width"`
-	Height                int                   `json:"height"`
+	ProjectID             string                   `json:"projectId"`
+	Rows                  []storyboardBatchShotRow `json:"rows"`
+	FirstFrameResourceIDs map[int]string           `json:"firstFrameResourceIds"`
+	Width                 int                      `json:"width"`
+	Height                int                      `json:"height"`
 }
 
 type storyboardMusicBatchInput struct {
@@ -91,6 +106,27 @@ func (s *Service) CreateStoryboardVideoBatchTask(userID string, req StoryboardVi
 	input := storyboardVideoBatchInput{
 		ProjectID: strings.TrimSpace(req.ProjectID), Rows: req.Rows,
 		FirstFrameResourceIDs: req.FirstFrameResourceIDs, Width: req.Width, Height: req.Height,
+	}
+	// 镜头号是结果的唯一键，重号会让前端只认到最后一行。
+	seen := make(map[int]bool, len(req.Rows))
+	for index := range req.Rows {
+		shotNumber := storyboardBatchShotNumber(req.Rows[index], index)
+		if shotNumber <= 0 {
+			return nil, BadAuthRequest("shotNumber 必须为正整数")
+		}
+		if seen[shotNumber] {
+			return nil, BadAuthRequest(fmt.Sprintf("shotNumber 重复：%d", shotNumber))
+		}
+		seen[shotNumber] = true
+	}
+	// 请求没带画幅就按项目 aspectRatio 推导一次，对整批行生效（与 RenderAllProjectShots 同一口径）。
+	// 不推导会落 Gateway /v1/videos 缺省 864x480（compat_h3cweb.py 的 width,height 缺省），
+	// 竖屏项目的分镜片就静默变横屏。草稿不适用：本路径走完整 TTS/混音链，没有 draft 档。
+	// 项目取不到就保持原样——拿不到画幅不该让原本能入队的批次失败。
+	if input.Width <= 0 || input.Height <= 0 {
+		if project, err := s.activeProjectForUser(userID, input.ProjectID); err == nil {
+			input.Width, input.Height = shotRenderSize(project.AspectRatio, false)
+		}
 	}
 	return s.createStoryboardBatchTask(userID, input.ProjectID, storyboardVideoBatchTaskType, fmt.Sprintf("一键视频：%d 个镜头", len(req.Rows)), input)
 }
@@ -257,6 +293,9 @@ func (s *Service) processStoryboardComposeTask(ctx context.Context, task model.T
 
 // batchRowVideoStore 收敛父任务对子任务队列的全部依赖；单元测试用 fake 模拟 worker 领取。
 type batchRowVideoStore interface {
+	// WaitForChildSlot 在建子任务前等名额空出来：父任务自己占 1 个名额，
+	// 不等就是「前 4 个能进、剩下全被配额拒掉」。
+	WaitForChildSlot(ctx context.Context) error
 	CreateRowVideoTask(req StoryboardRowVideoTaskRequest) (*model.Task, error)
 	ChildTask(id string) (*model.Task, error)
 	UpdateBatchProgress(stage string, progress int) error
@@ -269,7 +308,83 @@ type serviceBatchStore struct {
 }
 
 func (st serviceBatchStore) CreateRowVideoTask(req StoryboardRowVideoTaskRequest) (*model.Task, error) {
+	// 一键视频只送角色资产 ID（见 batchShotToRowVideoRow），音色要靠 characterVersionId 反查绑定。
+	// 这里补齐缺失的版本号，否则 storyboardRowVoiceKey 整个跳到空串、用渠道默认音色。
+	st.s.resolveRowCharacterVersions(st.userID, req.ProjectID, req.Row)
 	return st.s.CreateStoryboardRowVideoTask(st.userID, req)
+}
+
+// resolveRowCharacterVersions 按资产 ID 反查角色当前版本号并回填到批量行里。
+// 口径与 autoShotCharacterReferences 一致：优先 confirmed 版本，其次主版本；
+// 两者皆空（角色从未落过版本）就留空，让音色回落到渠道默认，不凭空造版本。
+// ponytail: 每行一次 ProjectAssets 查询 + 每个角色一次 AssetVersions，角色数个位数够用；
+// 角色多到几十个再改成一次性查全项目版本表。
+func (s *Service) resolveRowCharacterVersions(userID string, projectID string, row *storyboardRowVideoRow) {
+	if row == nil || len(row.Characters) == 0 {
+		return
+	}
+	var missing bool
+	for _, character := range row.Characters {
+		if strings.TrimSpace(character.CharacterAssetID) != "" && strings.TrimSpace(character.CharacterVersionID) == "" {
+			missing = true
+			break
+		}
+	}
+	if !missing {
+		return
+	}
+	assets, err := s.repo.ProjectAssets(userID, projectID)
+	if err != nil {
+		return // 查询失败不阻断入队，退化为渠道默认音色
+	}
+	byID := make(map[string]model.Asset, len(assets))
+	for _, asset := range assets {
+		byID[asset.ID] = asset
+	}
+	for index := range row.Characters {
+		character := &row.Characters[index]
+		if strings.TrimSpace(character.CharacterVersionID) != "" {
+			continue
+		}
+		asset, ok := byID[strings.TrimSpace(character.CharacterAssetID)]
+		if !ok {
+			continue
+		}
+		versionID := strings.TrimSpace(asset.PrimaryVersionID)
+		if versions, versionsErr := s.repo.AssetVersions(asset.ID); versionsErr == nil {
+			for _, version := range versions {
+				if version.Status == model.AssetVersionStatusConfirmed && strings.TrimSpace(version.ID) != "" {
+					versionID = version.ID
+					break
+				}
+			}
+		}
+		character.CharacterVersionID = versionID
+	}
+}
+
+// WaitForChildSlot 轮询活动任务名额，空出来才返回。
+// 判定直接用 ActiveTaskCountForUser（含父任务自己），不改它的语义：
+// 另外三个调用端都是「任务还不存在时先查一次」，排除自己等于什么都没做。
+func (st serviceBatchStore) WaitForChildSlot(ctx context.Context) error {
+	policy, err := st.s.RuntimePolicy()
+	if err != nil {
+		return err
+	}
+	for {
+		active, err := st.s.repo.ActiveTaskCountForUser(st.userID)
+		if err != nil {
+			return err
+		}
+		if active < int64(policy.Task.ActiveTaskLimit) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(storyboardBatchPollInterval):
+		}
+	}
 }
 
 func (st serviceBatchStore) ChildTask(id string) (*model.Task, error) {
@@ -290,6 +405,7 @@ type storyboardBatchRowResult struct {
 
 // runStoryboardVideoBatch 逐行入队子任务，行失败不阻断；父任务进度 = 完成行数/总数。
 // 全部行失败时父任务以错误收场；只要 ≥1 行成功父任务即成功。
+// 入队前等名额空出来：配额只剩 4 个时，剩下 16 行不是丢在内存里，而是排队等前一批跑完。
 func runStoryboardVideoBatch(ctx context.Context, store batchRowVideoStore, input storyboardVideoBatchInput) ([]storyboardBatchRowResult, error) {
 	rows := input.Rows
 	if len(rows) == 0 {
@@ -302,10 +418,18 @@ func runStoryboardVideoBatch(ctx context.Context, store batchRowVideoStore, inpu
 	}
 	var children []childRef
 	for index := range rows {
-		shotNumber := index + 1
+		shotNumber := storyboardBatchShotNumber(rows[index], index)
+		if err := store.WaitForChildSlot(ctx); err != nil {
+			// 名额没排上就整批停在这里，剩余行逐行标失败，绝不静默消失。
+			for rest := index; rest < len(rows); rest++ {
+				results[rest] = storyboardBatchRowResult{ShotNumber: storyboardBatchShotNumber(rows[rest], rest), Status: string(model.TaskStatusFailed), Error: err.Error()}
+			}
+			updateStoryboardBatchProgress(store, results)
+			return results, err
+		}
 		child, err := store.CreateRowVideoTask(StoryboardRowVideoTaskRequest{
 			ProjectID:            input.ProjectID,
-			Row:                  batchShotToRowVideoRow(rows[index]),
+			Row:                  batchShotToRowVideoRow(rows[index].agentStoryboardShot),
 			FirstFrameResourceID: input.FirstFrameResourceIDs[shotNumber],
 			Width:                input.Width,
 			Height:               input.Height,
@@ -408,7 +532,8 @@ func childVideoResourceID(resultJSON string) string {
 }
 
 // batchShotToRowVideoRow 把分镜行落库形态转成 row_video 编排所需子集。
-// CharacterIDs 是角色资产 ID，不携带音色版本；批量路径使用渠道默认音色。
+// CharacterIDs 是角色资产 ID，音色版本由 serviceBatchStore.CreateRowVideoTask 回填
+// （见 resolveRowCharacterVersions）；这里保持纯映射，不碰数据库。
 func batchShotToRowVideoRow(shot agentStoryboardShot) *storyboardRowVideoRow {
 	characters := make([]storyboardRowCharacterRef, 0, len(shot.CharacterIDs))
 	for _, assetID := range shot.CharacterIDs {
@@ -453,6 +578,24 @@ type musicGateway interface {
 	CreateMusicTrack(ctx context.Context, prompt string, durationSeconds int) (storyboardMusicWav, error)
 }
 
+// Gateway /v1/music 只接受 10-600 秒（MediaGateway compat_openai.py:528）。
+// 两条音乐路径共用这一组边界：越界请求会被网关 400，而调用侧只能看到一个不
+// 透出原因的 500。向上 clamp 无损——成片那边 render.bgm 会按实际时长裁。
+const (
+	musicSecondsMin = 10
+	musicSecondsMax = 600
+)
+
+func clampMusicSeconds(seconds int) int {
+	if seconds < musicSecondsMin {
+		return musicSecondsMin
+	}
+	if seconds > musicSecondsMax {
+		return musicSecondsMax
+	}
+	return seconds
+}
+
 // planStoryboardMusicGroups 按 musicGroupId 分组（空→seg-01），组内时长求和并 clamp 到 [10,600]；
 // prompt = 组内首个 musicMood（空则用项目风格描述）+ 固定后缀；分组按首次出现顺序排列。
 func planStoryboardMusicGroups(rows []agentStoryboardShot, styleDescription string) []storyboardMusicGroupPlan {
@@ -478,12 +621,7 @@ func planStoryboardMusicGroups(rows []agentStoryboardShot, styleDescription stri
 	plans := make([]storyboardMusicGroupPlan, 0, len(order))
 	for _, groupID := range order {
 		plan := *groups[groupID]
-		if plan.DurationSeconds < 10 {
-			plan.DurationSeconds = 10
-		}
-		if plan.DurationSeconds > 600 {
-			plan.DurationSeconds = 600
-		}
+		plan.DurationSeconds = clampMusicSeconds(plan.DurationSeconds)
 		plans = append(plans, plan)
 	}
 	return plans

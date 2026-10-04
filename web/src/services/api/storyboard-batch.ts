@@ -29,6 +29,9 @@ export type StoryboardShotPayload = {
     optionalDetails?: string[];
     continuityOut?: string;
     characterIds?: string[];
+    // P0-2: 批次結果以 shotNumber 為 key，前端也用 row.shotNumber 取值。
+    // 不帶＝後端退回 index+1，部分重跑時會與前端錯位。
+    shotNumber?: number;
 };
 
 export type StoryboardVideoBatchRowResult = {

@@ -9,9 +9,10 @@ import (
 	"infinite-canvas/backend/internal/model"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
-const CurrentSchemaVersion int64 = 35
+const CurrentSchemaVersion int64 = 36
 
 const baselineSchemaChecksum = "sha256:open-ai-canvas-schema-v1-20260830"
 const schemaMigrationAppliedAtIndexChecksum = "sha256:schema-migrations-applied-at-index-v2-20260830"
@@ -119,6 +120,43 @@ var schemaMigrations = []migration{
 		return nil
 	}},
 	{version: 35, name: "auth_notifications", checksum: authNotificationsChecksum, apply: migrateSchemaV35},
+	{version: 36, name: "builtin_qwen_voice_profiles", checksum: "sha256:builtin-qwen-voice-profiles-v36-20261004", apply: migrateBuiltinQwenVoiceProfiles},
+}
+
+// migrateBuiltinQwenVoiceProfiles 为存量用户补齐网关可用的预置音色。
+// voice_profiles 是按用户隔离的运行期数据，不是表结构，所以这里只为「迁移时已存在的用户」
+// 落库；新用户由 app.ListVoiceProfiles 的幂等兜底路径补齐（同一份 model.QwenVoiceKeys）。
+// 冲突即跳过：老用户改过名字/口音的行不会被这里覆盖回去。
+func migrateBuiltinQwenVoiceProfiles(tx *gorm.DB) error {
+	if !tx.Migrator().HasTable(&model.VoiceProfile{}) {
+		return nil
+	}
+	var userIDs []string
+	if err := tx.Model(&model.User{}).Distinct().Pluck("id", &userIDs).Error; err != nil {
+		return fmt.Errorf("读取存量用户：%w", err)
+	}
+	now := time.Now().UTC()
+	profiles := make([]model.VoiceProfile, 0, len(userIDs)*len(model.QwenVoiceKeys))
+	for _, userID := range userIDs {
+		for _, key := range model.QwenVoiceKeys {
+			timbre := "通用音色"
+			if dialect, ok := model.QwenVoiceDialects[key]; ok {
+				timbre = dialect
+			}
+			profiles = append(profiles, model.VoiceProfile{
+				ID: userID + ":" + key, UserID: userID, Name: model.QwenVoiceDisplayName(key),
+				Provider: "qwen3_tts", VoiceKey: key, Language: "多语言", Timbre: timbre,
+				CompatibleModelsJSON: "[]", Status: "active", CreatedAt: now, UpdatedAt: now,
+			})
+		}
+	}
+	if len(profiles) == 0 {
+		return nil
+	}
+	return tx.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "user_id"}, {Name: "provider"}, {Name: "voice_key"}},
+		DoNothing: true,
+	}).Create(&profiles).Error
 }
 
 func migrateChannelModelTags(tx *gorm.DB) error {

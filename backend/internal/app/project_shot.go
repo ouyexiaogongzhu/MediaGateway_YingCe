@@ -16,10 +16,12 @@ type CreateProjectShotRequest struct {
 	UnitID      string            `json:"unitId"`
 	Title       string            `json:"title"`
 	Description string            `json:"description"`
-	Position    int               `json:"position"`
-	DurationMs  int64             `json:"durationMs"`
-	Status      string            `json:"status"`
-	Revision    ShotRevisionInput `json:"revision"`
+	// 指针而非 int：省略 ≠ 0。前端 saveProjectShot 的 position 是可选的，改一个镜头
+	// 的台词/描述时不会带 position，用 int 会被解成 0 把顺序静默写坏。
+	Position   *int          `json:"position"`
+	DurationMs int64         `json:"durationMs"`
+	Status     string        `json:"status"`
+	Revision   ShotRevisionInput `json:"revision"`
 }
 
 type ShotRevisionInput struct {
@@ -81,13 +83,18 @@ func (s *Service) CreateProjectShot(userID string, projectID string, req CreateP
 	if title == "" {
 		return model.Shot{}, BadAuthRequest("镜头标题不能为空")
 	}
-	if req.Position < 0 || req.DurationMs < 0 {
+	if (req.Position != nil && *req.Position < 0) || req.DurationMs < 0 {
 		return model.Shot{}, BadAuthRequest("镜头顺序和时长不能为负数")
 	}
 	now := time.Now()
 	shotID := strings.TrimSpace(req.ID)
 	create := shotID == ""
 	status := strings.TrimSpace(req.Status)
+	// 新建时省略 position 就是排在末尾（与旧 int 缺省 0 的行为一致）。
+	position := 0
+	if req.Position != nil {
+		position = *req.Position
+	}
 	if create {
 		shotID = newID()
 		if status == "" {
@@ -104,6 +111,10 @@ func (s *Service) CreateProjectShot(userID string, projectID string, req CreateP
 		if status == "" {
 			status = existing.Status
 		}
+		// 改台词/描述的请求不带 position：沿用原顺序，别把镜头重排到 0。
+		if req.Position == nil {
+			position = existing.Position
+		}
 		now = existing.CreatedAt
 	}
 	if !validShotStatus(status) {
@@ -115,7 +126,7 @@ func (s *Service) CreateProjectShot(userID string, projectID string, req CreateP
 	if err != nil {
 		return model.Shot{}, err
 	}
-	shot := model.Shot{ID: shotID, ProjectID: projectID, UnitID: unitID, CurrentRevisionID: revision.ID, Title: title, Description: revision.PlotDescription, Position: req.Position, DurationMs: revision.DurationMs, Status: status, CreatedAt: now, UpdatedAt: updatedAt}
+	shot := model.Shot{ID: shotID, ProjectID: projectID, UnitID: unitID, CurrentRevisionID: revision.ID, Title: title, Description: revision.PlotDescription, Position: position, DurationMs: revision.DurationMs, Status: status, CreatedAt: now, UpdatedAt: updatedAt}
 	if err := s.repo.SaveShotWithRevision(&shot, &revision, create); err != nil {
 		return model.Shot{}, err
 	}
