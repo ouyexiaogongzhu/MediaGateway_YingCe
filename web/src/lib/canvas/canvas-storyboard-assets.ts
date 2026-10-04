@@ -86,14 +86,24 @@ function scriptAssetHints(scriptText: string, mentionRefs: CanvasResourceReferen
         if (reference.kind === "image" && reference.label) byLabel.set(reference.label.replace(/^@?/, ""), reference.nodeId);
     }
     const hints: Array<{ name: string; kind: "character" | "environment" | "prop"; nodeId: string }> = [];
-    const pattern = /[\*＊\s·•\-]*([^（()）\n]{1,20}?)\s*[（(]\s*@(图片\d+)\s*[）)]/g;
-    for (const match of scriptText.matchAll(pattern)) {
-        const rawName = match[1].replace(/[\*＊\s·•\-:：]/g, "").trim();
-        const nodeId = byLabel.get(match[2]);
-        if (!rawName || !nodeId) continue;
-        if (/^場?景$/.test(rawName)) hints.push({ name: rawName, kind: "environment", nodeId });
-        else if (/^道具$/.test(rawName)) hints.push({ name: rawName, kind: "prop", nodeId });
-        else hints.push({ name: rawName, kind: "character", nodeId });
+    const add = (rawName: string | undefined, label: string | undefined) => {
+        const name = (rawName || "").replace(/[\*＊\s·•\-:：]/g, "").replace(/[圖图]$/, "").trim();
+        const nodeId = label ? byLabel.get(label) : undefined;
+        if (!name || !nodeId) return;
+        if (/^場?景$/.test(name)) hints.push({ name, kind: "environment", nodeId });
+        else if (/^道具$/.test(name)) hints.push({ name, kind: "prop", nodeId });
+        else hints.push({ name, kind: "character", nodeId });
+    };
+    // 兩種寫法都要認：
+    //   名字（@图片2）        —— 名字在前、提及在括號裡
+    //   @图片2 是火魔法師烬炎  —— 提及在前、名字一路到行尾（畫布上實際的寫法）
+    // 原本只認前者，後者整條比對從來沒生效過：分鏡長期掛著指向不存在節點的
+    // assetRefs（模型把 @图片N 當成 nodeId 填進去），而 assetBindings 永遠是空的。
+    for (const match of scriptText.matchAll(/[\*∗\s·•\-]*([^（()）\n]{1,20}?)\s*[（(]\s*@(图片\d+)\s*[）)]/g)) {
+        add(match[1], match[2]);
+    }
+    for (const match of scriptText.matchAll(/@(图片\d+)\s*(?:是|為|为|指|=|:：)?\s*([^\n（()）]{1,24}?)\s*$/gm)) {
+        add(match[2], match[1]);
     }
     return hints;
 }
@@ -103,13 +113,13 @@ export function autoBindStoryboardRowAssets<T extends { assetBindings?: Storyboa
     nodes: CanvasNodeData[],
     hints?: StoryboardScriptAssetHints,
 ): T[] {
-    let rows = inputRows;
+    const rows = inputRows;
     const candidates = nodes
         .filter((node) => node.type === CanvasNodeType.Image || node.type === CanvasNodeType.Drawing)
         .map((node) => ({ node, title: (node.title || "").trim().toLowerCase() }))
         .filter((item) => item.title.length >= 1);
     const scriptHints = hints?.scriptText ? scriptAssetHints(hints.scriptText, hints.mentionRefs) : [];
-    // 模型会把 assetRefs.nodeId 填成 @图片N 提及标签（非真实节点 ID），先剔除死绑定。
+    // 模型会把 nodeId 填成 @图片N 提及标签或自創名字（非真实节点 ID），先剔除死绑定。
     const knownNodeIds = new Set(nodes.map((node) => node.id));
     const cleaned = rows.map((row) => {
         const bindings = row.assetBindings || [];
@@ -117,7 +127,6 @@ export function autoBindStoryboardRowAssets<T extends { assetBindings?: Storyboa
         return { ...row, assetBindings: bindings.filter((binding) => knownNodeIds.has(binding.nodeId)) };
     });
     if (!candidates.length && !scriptHints.length) return cleaned;
-    rows = cleaned;
     const characterName = (value: unknown): string => {
         if (typeof value === "string") return value.trim().toLowerCase();
         if (value && typeof value === "object") {
@@ -126,7 +135,7 @@ export function autoBindStoryboardRowAssets<T extends { assetBindings?: Storyboa
         }
         return "";
     };
-    return rows.map((row) => {
+    return cleaned.map((row) => {
         const bindings: StoryboardAssetBinding[] = [...(row.assetBindings || [])];
         const push = (nodeId: string, role: StoryboardAssetRole, priority: number) => {
             if (bindings.every((binding) => binding.nodeId !== nodeId)) bindings.push({ nodeId, role, priority });
@@ -136,6 +145,16 @@ export function autoBindStoryboardRowAssets<T extends { assetBindings?: Storyboa
             .map(characterName)
             .filter(Boolean);
         const text = `${String(record.plotDescription || "")} ${String(record.videoMotionPrompt || "")}`.toLowerCase();
+        // 括號裡是描述不是名字：模型給「烬炎 (火法师)」，劇本寫「火魔法師烬炎」。
+        // 兩種命名順序（名字在前 / 角色名在後）都存在，所以比對前先剝掉括號再雙向包含。
+        const bare = (name: string) => name.replace(/[（(][^）)]*[）)]/g, "").trim();
+        const named = (hintName: string) => {
+            const h = hintName.toLowerCase();
+            return names.some((name) => {
+                const b = bare(name);
+                return !!b && (b === h || name.includes(h) || h.includes(b));
+            });
+        };
         for (const { node, title } of candidates) {
             // 短标题（如 A/B）只做精确匹配，避免单字符子串误伤；≥2 字才允许包含匹配与正文提及匹配。
             if (names.some((name) => name === title || (title.length >= 2 && name.includes(title)))) push(node.id, "character", 60);
@@ -145,7 +164,7 @@ export function autoBindStoryboardRowAssets<T extends { assetBindings?: Storyboa
             if (hint.kind === "environment") push(hint.nodeId, "environment", 50);
             else if (hint.kind === "prop") {
                 if (/陽具|阳具|道具|雙頭|双头|玩具|假陰莖|假阴茎|按摩器/.test(text)) push(hint.nodeId, "prop", 50);
-            } else if (hint.kind === "character" && names.some((name) => name === hint.name.toLowerCase() || name.includes(hint.name.toLowerCase()))) {
+            } else if (hint.kind === "character" && named(hint.name)) {
                 push(hint.nodeId, "character", 70);
             }
         }

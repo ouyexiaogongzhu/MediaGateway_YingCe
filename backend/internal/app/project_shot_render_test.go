@@ -479,3 +479,21 @@ func TestRenderAllProjectShotsSingleShotKeepsShotMusic(t *testing.T) {
 		t.Fatalf("单镜头应保留逐镜 music 段：%v", music)
 	}
 }
+
+func TestRenderProjectShotReportsVoiceSkipped(t *testing.T) {
+	// 單鏡頭渲染此前把 renderProjectShot 的第三個返回值用 _ 丟掉，於是帶台詞的
+	// 鏡頭被靜默丟棄台詞、API 也不回報任何東西（render-all 有 voiceSkippedShotIds）。
+	service, gateway := newRenderAllTestService(t)
+	// Draft 會整段跳過 voice（那是 draft 的定義），所以要跑完整鏈路才碰得到這條路徑。
+	result, err := service.RenderProjectShot(context.Background(), "user-render", "project-render", "shot-1", RenderAllShotsRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// shot-1 的 revision 帶 Dialogue，且沒有任何音色綁定 → 必須回報
+	if !result.VoiceSkipped {
+		t.Fatal("voiceSkipped must be true for a dialogue shot with no voice binding")
+	}
+	if _, hasVoice := gateway.submitted(t, "shot")[0]["voice"]; hasVoice {
+		t.Fatal("no voice stage may be sent when no voice binding exists")
+	}
+}

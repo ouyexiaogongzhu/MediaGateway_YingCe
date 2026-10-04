@@ -59,6 +59,10 @@ type RenderedShotResult struct {
 	LastFramePath       string `json:"lastFramePath,omitempty"`
 	VideoArtifactID     string `json:"videoArtifactId"`
 	LastFrameArtifactID string `json:"lastFrameArtifactId,omitempty"`
+	// VoiceSkipped=true 表示这个镜头有台词但没绑音色，台词被丢弃。
+	// render-all 一直有回报 voiceSkippedShotIds，单镜头此前把 renderProjectShot
+	// 的第三个返回值用 _ 丢掉，于是用户单独渲染一个带台词的镜头时没有任何提示。
+	VoiceSkipped bool `json:"voiceSkipped,omitempty"`
 }
 
 const renderAllShotTempPrefix = "canvas-shot-ref-"
@@ -572,9 +576,10 @@ func (s *Service) RenderProjectShot(ctx context.Context, userID string, projectI
 			shotRefs = append(shotRefs, reference)
 		}
 	}
-	rendered, _, _, err := s.renderProjectShot(ctx, gateway, userID, projectID, shot, "", shotRefs, req)
+	rendered, _, voiceSkipped, err := s.renderProjectShot(ctx, gateway, userID, projectID, shot, "", shotRefs, req)
 	if err != nil {
 		return nil, err
 	}
+	rendered.VoiceSkipped = voiceSkipped
 	return &rendered, nil
 }
