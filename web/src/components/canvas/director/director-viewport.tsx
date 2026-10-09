@@ -6,7 +6,9 @@ import type { Material } from "three";
 import { GLTFLoader, SkeletonUtils } from "three-stdlib";
 
 import { resolveDirectorBoneRotation } from "@/lib/canvas/director/director-animation-semantics";
+import { prepareDirectorPlan, sampleDirectorPlan, type PlanJointSample, type PlanObjectSample } from "@/lib/canvas/director/director-animation";
 import { applyClaySceneMaterials } from "@/lib/canvas/director/director-clay-materials";
+import type { DirectorPlan } from "@/lib/canvas/director/director-document";
 import { createMannequin, mannequinJoints, type MannequinJoint } from "@/lib/canvas/director/director-mannequin";
 import { createDirectorTransaction, installDirectorTerminalListeners } from "@/lib/canvas/director/director-gesture-transaction";
 import { emptyDirectorPlacementIntent, finiteDirectorGroundPoint, type DirectorGroundPoint, type DirectorPlacementIntent } from "@/lib/canvas/director/director-placement";
@@ -38,6 +40,8 @@ type DirectorViewportProps = {
     renderMode: DirectorRenderMode;
     playhead: number;
     playing: boolean;
+    /** 方案预演（director-animation.ts）：提供时对象与相机按方案采样，gizmo 冻结。 */
+    planPreview?: DirectorPlan | null;
     /** 动画模式下显示演员与摄影机 Transform 关键帧形成的空间路径。 */
     showMotionPaths?: boolean;
     /** 取景模式。省略即自由视角，保持接线前的行为不变。 */
@@ -289,7 +293,7 @@ function DirectorViewportNotice({ title, description, actionLabel, onAction, var
     );
 }
 
-function DirectorSceneContent({ scene, selectedObjectId, selectedBone, transformMode, renderMode, playhead, playing, showMotionPaths = false, viewMode = DIRECTOR_DEFAULT_VIEW_MODE, onSelectObject, onSelectBone, onObjectTransform, onBoneTransform, onActorRigReady, onCaptureContext, onRelease, onContextLost, onContextRestored, onLoadStateChange, onGroundPoint, onOrbitControls }: DirectorCanvasSurfaceProps) {
+function DirectorSceneContent({ scene, selectedObjectId, selectedBone, transformMode, renderMode, playhead, playing, planPreview = null, showMotionPaths = false, viewMode = DIRECTOR_DEFAULT_VIEW_MODE, onSelectObject, onSelectBone, onObjectTransform, onBoneTransform, onActorRigReady, onCaptureContext, onRelease, onContextLost, onContextRestored, onLoadStateChange, onGroundPoint, onOrbitControls }: DirectorCanvasSurfaceProps) {
     const { gl, camera, scene: threeScene, invalidate, set, size } = useThree();
     const orbitRef = useRef<DirectorOrbitControls>(null);
     const [transforming, setTransforming] = useState(false);
@@ -306,9 +310,23 @@ function DirectorSceneContent({ scene, selectedObjectId, selectedBone, transform
     const [orthoCamera] = useState(() => new OrthographicCamera(-1, 1, 1, -1, 0.05, 500));
     // CAM 与正交轴向的取景解算都是纯函数：mode 不匹配时各自返回 null，互不冲突。
     // 活动相机不直接看 viewMode：CAM 取景失败必须回落 free，否则会露出从未写入的 camCamera。
-    const camFraming = resolveDirectorViewFraming({ scene, mode: viewMode, playhead });
+    // 方案预演：编译一次（base 取当时的物体 transform），按 playhead 纯采样；相机走 CAM 通道。
+    const preparedPlan = useMemo(() => {
+        if (!planPreview) return null;
+        try {
+            return prepareDirectorPlan(planPreview, (objectId) => {
+                const object = scene.objects.find((item) => item.id === objectId);
+                return object ? { position: object.transform.position, scale: object.transform.scale } : undefined;
+            });
+        } catch {
+            return null; // 非法方案（schema 不过/物体缺失）不渲染预演，绝不弄脏场景。
+        }
+    }, [planPreview, scene.objects]);
+    const planSample = useMemo(() => preparedPlan ? sampleDirectorPlan(preparedPlan, playhead) : null, [preparedPlan, playhead]);
+    const planFraming = planSample ? planViewFraming(planSample.camera) : null;
+    const camFraming = planFraming ?? resolveDirectorViewFraming({ scene, mode: viewMode, playhead });
     const orthoFraming = resolveDirectorOrthographicFraming({ scene, mode: viewMode });
-    const effectiveViewport = resolveDirectorEffectiveViewport({ mode: viewMode, framing: camFraming });
+    const effectiveViewport = planFraming ? resolveDirectorEffectiveViewport({ mode: "camera", framing: planFraming }) : resolveDirectorEffectiveViewport({ mode: viewMode, framing: camFraming });
     const actorMotionPaths = useMemo(() => showMotionPaths ? scene.objects.filter((object) => object.visible && (object.kind === "actor" || object.kind === "mannequin" || object.primitive === "character") && directorTransformPathLength(object.keyframes) > 0.001) : [], [scene.objects, showMotionPaths]);
     const cameraMotionPaths = useMemo(() => showMotionPaths ? scene.cameras.filter((item) => directorTransformPathLength(item.keyframes) > 0.001) : [], [scene.cameras, showMotionPaths]);
     const suspendDisplayMaterialOverride = useCallback(() => {
@@ -444,6 +462,8 @@ function DirectorSceneContent({ scene, selectedObjectId, selectedBone, transform
                     selectedBone={selectedObjectId === object.id ? selectedBone : null}
                     transformMode={transformMode}
                     playhead={playhead}
+                    planTransform={planSample?.objects.get(object.id) ?? null}
+                    planJoints={planSample?.joints.get(object.id) ?? null}
                     onSelect={() => onSelectObject(object.id)}
                     onSelectBone={(bone) => { onSelectObject(object.id); onSelectBone(bone); }}
                     onTransforming={setTransforming}
@@ -550,9 +570,9 @@ function DirectorOrthoCameraSync({ camera, framing, aspect }: { camera: Orthogra
     return null;
 }
 
-function DirectorObjectView({ object, selected, selectedBone, transformMode, playhead, onSelect, onSelectBone, onTransforming, onTransform, onBoneTransform, onActorRigReady, onLoadStateChange }: { object: DirectorObject; selected: boolean; selectedBone: string | null; transformMode: DirectorViewportProps["transformMode"]; playhead: number; onSelect: () => void; onSelectBone: (bone: string | null) => void; onTransforming: (value: boolean) => void; onTransform: (from: DirectorTransform, to: DirectorTransform) => void; onBoneTransform: (bone: string, rotation: DirectorQuat) => void; onActorRigReady: (rig: DirectorRig, animations: AnimationClip[]) => void; onLoadStateChange: (id: string, signal: DirectorLoadSignal, retry: () => void) => void }) {
+function DirectorObjectView({ object, selected, selectedBone, transformMode, playhead, planTransform, planJoints, onSelect, onSelectBone, onTransforming, onTransform, onBoneTransform, onActorRigReady, onLoadStateChange }: { object: DirectorObject; selected: boolean; selectedBone: string | null; transformMode: DirectorViewportProps["transformMode"]; playhead: number; planTransform: PlanObjectSample | null; planJoints: PlanJointSample | null; onSelect: () => void; onSelectBone: (bone: string | null) => void; onTransforming: (value: boolean) => void; onTransform: (from: DirectorTransform, to: DirectorTransform) => void; onBoneTransform: (bone: string, rotation: DirectorQuat) => void; onActorRigReady: (rig: DirectorRig, animations: AnimationClip[]) => void; onLoadStateChange: (id: string, signal: DirectorLoadSignal, retry: () => void) => void }) {
     const [target, setTarget] = useState<Group | null>(null);
-    const resolved = interpolateDirectorTransform(object.transform, object.keyframes, playhead);
+    const resolved = planTransform ?? interpolateDirectorTransform(object.transform, object.keyframes, playhead);
     // 手势进行中冻结声明式 transform，交由 gizmo 直接改写 Object3D；终态后再由场景状态接管。
     const [frozen, setFrozen] = useState<DirectorTransform | null>(null);
     const transform = frozen || resolved;
@@ -568,9 +588,9 @@ function DirectorObjectView({ object, selected, selectedBone, transformMode, pla
                     onSelect();
                 }}
             >
-                <DirectorObjectVisual object={object} selected={selected} selectedBone={selectedBone} playhead={playhead} onSelectBone={onSelectBone} onBoneTransform={onBoneTransform} onActorRigReady={onActorRigReady} onLoadStateChange={onLoadStateChange} />
+                <DirectorObjectVisual object={object} selected={selected} selectedBone={selectedBone} playhead={playhead} planJoints={planJoints} onSelectBone={onSelectBone} onBoneTransform={onBoneTransform} onActorRigReady={onActorRigReady} onLoadStateChange={onLoadStateChange} />
             </group>
-            {selected && target ? (
+            {selected && target && !planTransform ? (
                 <DirectorObjectGizmo
                     target={target}
                     transformMode={transformMode}
@@ -640,6 +660,19 @@ function readObject3DTransform(target: Object3D): DirectorTransform {
     return { position: target.position.toArray() as DirectorVec3, rotation: [target.rotation.x, target.rotation.y, target.rotation.z], scale: target.scale.toArray() as DirectorVec3 };
 }
 
+/** 方案采样相机 → 视口取景结构。up 取世界 up（与 Toonflow lookAt 同语义，正俯仰镜头会退化）。 */
+function planViewFraming(view: { camera: { position: { x: number; y: number; z: number }; fov: number; near: number; far: number }; controls: { target: { x: number; y: number; z: number } } }) {
+    return {
+        cameraId: "plan-preview",
+        position: [view.camera.position.x, view.camera.position.y, view.camera.position.z] as DirectorVec3,
+        target: [view.controls.target.x, view.controls.target.y, view.controls.target.z] as DirectorVec3,
+        up: [0, 1, 0] as DirectorVec3,
+        fov: view.camera.fov,
+        near: view.camera.near,
+        far: view.camera.far,
+    };
+}
+
 function applyObject3DTransform(target: Object3D, transform: DirectorTransform) {
     target.position.set(...transform.position);
     target.rotation.set(...transform.rotation);
@@ -647,8 +680,8 @@ function applyObject3DTransform(target: Object3D, transform: DirectorTransform) 
     target.updateMatrixWorld(true);
 }
 
-function DirectorObjectVisual({ object, selected, selectedBone, playhead, onSelectBone, onBoneTransform, onActorRigReady, onLoadStateChange }: { object: DirectorObject; selected: boolean; selectedBone: string | null; playhead: number; onSelectBone: (bone: string | null) => void; onBoneTransform: (bone: string, rotation: DirectorQuat) => void; onActorRigReady: (rig: DirectorRig, animations: AnimationClip[]) => void; onLoadStateChange: (id: string, signal: DirectorLoadSignal, retry: () => void) => void }) {
-    if (object.kind === "mannequin") return <DirectorMannequinVisual object={object} selected={selected} />;
+function DirectorObjectVisual({ object, selected, selectedBone, playhead, planJoints, onSelectBone, onBoneTransform, onActorRigReady, onLoadStateChange }: { object: DirectorObject; selected: boolean; selectedBone: string | null; playhead: number; planJoints: PlanJointSample | null; onSelectBone: (bone: string | null) => void; onBoneTransform: (bone: string, rotation: DirectorQuat) => void; onActorRigReady: (rig: DirectorRig, animations: AnimationClip[]) => void; onLoadStateChange: (id: string, signal: DirectorLoadSignal, retry: () => void) => void }) {
+    if (object.kind === "mannequin") return <DirectorMannequinVisual object={object} selected={selected} planJoints={planJoints} />;
     if ((object.kind === "model" || object.kind === "actor" || object.primitive === "character") && (object.url || object.primitive === "character")) return <DirectorModel object={object} selected={selected} selectedBone={selectedBone} playhead={playhead} onSelectBone={onSelectBone} onBoneTransform={onBoneTransform} onActorRigReady={onActorRigReady} onLoadStateChange={onLoadStateChange} />;
     if (object.kind === "billboard" && object.url) return <DirectorBillboard object={object} selected={selected} />;
     const material = <meshStandardMaterial color={selected ? "#2f8cff" : object.color} roughness={0.68} metalness={0.05} />;
@@ -1065,7 +1098,7 @@ function applyDirectorBoneTracks(model: Object3D, object: DirectorObject, playhe
     });
 }
 
-function DirectorMannequinVisual({ object, selected }: { object: DirectorObject; selected: boolean }) {
+function DirectorMannequinVisual({ object, selected, planJoints }: { object: DirectorObject; selected: boolean; planJoints: PlanJointSample | null }) {
     // 几何体只在 id 或 hiddenParts 变化时重建；颜色/关节姿态走声明式同步，避免每帧重建 BufferGeometry。
     const hiddenKey = (object.hiddenParts ?? []).join(",");
     const group = useMemo(() => createMannequin(object.id, "#c7a77b", hiddenKey ? (hiddenKey.split(",") as unknown as MannequinJoint[]) : []), [object.id, hiddenKey]);
@@ -1082,10 +1115,10 @@ function DirectorMannequinVisual({ object, selected }: { object: DirectorObject;
             if (part instanceof Mesh) (part.material as MeshStandardMaterial).color.set(selected ? "#2f8cff" : object.color);
         });
         for (const joint of mannequinJoints) {
-            const euler = object.jointPoses?.[joint];
+            const euler = planJoints?.[joint] ?? object.jointPoses?.[joint];
             group.getObjectByName(joint)?.rotation.set(euler?.[0] ?? 0, euler?.[1] ?? 0, euler?.[2] ?? 0);
         }
-    }, [group, selected, object.color, object.jointPoses]);
+    }, [group, selected, object.color, object.jointPoses, planJoints]);
     return <primitive object={group} />;
 }
 

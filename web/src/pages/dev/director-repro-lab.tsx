@@ -3,7 +3,9 @@ import { Button, Table } from "antd";
 import { Switch } from "@/components/ui/base/switch";
 
 import { CanvasDirectorWorkbench } from "@/components/canvas/director/canvas-director-workbench";
+import { directorPlanSchema, type DirectorPlan } from "@/lib/canvas/director/director-document";
 import { DIRECTOR_REPRO_MATRIX, createDirectorReproScene, directorReproSceneIsOffline, injectDirectorReproModel, type DirectorReproModelVariant } from "@/lib/canvas/director/director-repro-fixture";
+import { createDirectorMannequin } from "@/lib/canvas/director/director-scene";
 import { readDirectorReproSnapshot, type DirectorReproSnapshot } from "@/lib/canvas/director/director-repro-runtime";
 import { resetDirectorDiagnosticDedupe } from "@/lib/canvas/director/director-diagnostics-recorder";
 import { getClientDiagnosticEvents } from "@/services/diagnostics/client-diagnostics";
@@ -22,6 +24,48 @@ import type { DirectorScene } from "@/types/director";
  * 真实工作台自带的新增控件（默认演员 GLB、上传模型、画布图片立牌）
  * 仍可能联网，这是刻意保留的真实行为 —— 不要据此宣称整个工作台永不发网。
  */
+/** P2 预演演示方案：plan-mannequin-1 走两步 + 镜头从门口缓推到中景（先注入人偶再预演）。 */
+const PLAN_DEMO_JSON = JSON.stringify({
+    name: "走两步+推镜",
+    duration: 4,
+    tracks: [
+        {
+            objectId: "plan-mannequin-1",
+            frames: [
+                { time: 0, rotation: { x: 0, y: 0, z: 0 }, position: { x: 0, y: 0, z: 0 } },
+                { time: 2, rotation: { x: 0, y: 0, z: 0 }, position: { x: 0, y: 0, z: 1.2 } },
+                { time: 4, rotation: { x: 0, y: 0, z: 0 }, position: { x: 0, y: 0, z: 2.4 } },
+            ],
+        },
+        {
+            objectId: "plan-mannequin-1",
+            joint: "leftHip",
+            frames: [
+                { time: 0, rotation: { x: -0.3, y: 0, z: 0 } },
+                { time: 1, rotation: { x: 0.3, y: 0, z: 0 } },
+                { time: 2, rotation: { x: -0.3, y: 0, z: 0 } },
+                { time: 3, rotation: { x: 0.3, y: 0, z: 0 } },
+                { time: 4, rotation: { x: -0.3, y: 0, z: 0 } },
+            ],
+        },
+        {
+            objectId: "plan-mannequin-1",
+            joint: "rightHip",
+            frames: [
+                { time: 0, rotation: { x: 0.3, y: 0, z: 0 } },
+                { time: 1, rotation: { x: -0.3, y: 0, z: 0 } },
+                { time: 2, rotation: { x: 0.3, y: 0, z: 0 } },
+                { time: 3, rotation: { x: -0.3, y: 0, z: 0 } },
+                { time: 4, rotation: { x: 0.3, y: 0, z: 0 } },
+            ],
+        },
+    ],
+    cameraFrames: [
+        { time: 0, easing: "smooth", view: { camera: { position: { x: 2.5, y: 1.6, z: 5 }, fov: 50, near: 0.05, far: 500 }, controls: { target: { x: 0, y: 1, z: 0 } } } },
+        { time: 4, easing: "smooth", view: { camera: { position: { x: 1.2, y: 1.4, z: 2.6 }, fov: 50, near: 0.05, far: 500 }, controls: { target: { x: 0, y: 1, z: 1.5 } } } },
+    ],
+}, null, 2);
+
 export default function DirectorReproLab() {
     const [scene, setScene] = useState<DirectorScene>(() => createDirectorReproScene());
     // workbench 是 fixed inset-0 全屏浮层，会完全遮住本页。默认关闭，
@@ -31,6 +75,9 @@ export default function DirectorReproLab() {
     const [appliedCount, setAppliedCount] = useState(0);
     const [flushCount, setFlushCount] = useState(0);
     const [events, setEvents] = useState(() => readDirectorEvents());
+    const [planText, setPlanText] = useState(PLAN_DEMO_JSON);
+    const [plan, setPlan] = useState<DirectorPlan | null>(null);
+    const [planError, setPlanError] = useState<string | null>(null);
     const snapshot = useMemo(() => readDirectorReproSnapshot(), []);
 
     const refreshEvents = useCallback(() => setEvents(readDirectorEvents()), []);
@@ -62,6 +109,33 @@ export default function DirectorReproLab() {
     const injectModel = useCallback((variant: DirectorReproModelVariant) => {
         setScene((current) => injectDirectorReproModel(current, variant));
     }, []);
+
+    /** P2 预演：固定 id 的人偶 + 手写 plan JSON。 */
+    const injectPlanMannequin = useCallback(() => {
+        setScene((current) => current.objects.some((item) => item.id === "plan-mannequin-1") ? current : {
+            ...current,
+            objects: [...current.objects, { ...createDirectorMannequin("预演人偶", [0, 0, 0], "#f1f3f5"), id: "plan-mannequin-1" }],
+        });
+    }, []);
+
+    const applyPlanText = useCallback(() => {
+        let parsedJson: unknown;
+        try {
+            parsedJson = JSON.parse(planText);
+        } catch {
+            setPlanError("JSON 解析失败");
+            setPlan(null);
+            return;
+        }
+        const parsed = directorPlanSchema.safeParse(parsedJson);
+        if (!parsed.success) {
+            setPlanError(parsed.error.issues[0]?.message ?? "方案不合法");
+            setPlan(null);
+            return;
+        }
+        setPlanError(null);
+        setPlan(parsed.data);
+    }, [planText]);
 
     return (
         <div className="min-h-dvh overflow-y-auto p-5" style={{ background: "var(--bg)", color: "var(--fg)" }}>
@@ -96,8 +170,24 @@ export default function DirectorReproLab() {
             <DiagnosticEventList events={events} />
             <ReproMatrix />
 
+            <div className="mb-4 rounded border p-3" style={{ borderColor: "var(--border)" }}>
+                <div className="mb-2 flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-medium">方案预演（P2）</span>
+                    <Button size="small" data-testid="inject-plan-mannequin" onClick={injectPlanMannequin}>
+                        注入预演人偶（plan-mannequin-1）
+                    </Button>
+                    <Button size="small" data-testid="apply-plan" onClick={applyPlanText}>
+                        解析并预演
+                    </Button>
+                    {plan ? <StatusBadge tone="success" label={`预演中：${plan.name}`} /> : null}
+                    {planError ? <StatusBadge tone="error" label={planError} /> : null}
+                </div>
+                <textarea data-testid="plan-json" className="h-48 w-full font-mono text-xs" value={planText} onChange={(event) => setPlanText(event.target.value)} />
+                <p className="mt-1 text-[var(--fs-tiny)] opacity-70">解析通过后打开导演台，切到「动画」模式拖播放头/播放即可预演；相机取景走 CAM 视角。</p>
+            </div>
+
             {workbenchOpen ? (
-                <CanvasDirectorWorkbench open scene={scene} imageNodes={[]} onboardingScope="director-repro-lab" onClose={() => setWorkbenchOpen(false)} onChange={onChange} onApply={onApply} onDeleteImageNode={() => undefined} onFlush={onFlush} />
+                <CanvasDirectorWorkbench open scene={scene} imageNodes={[]} onboardingScope="director-repro-lab" onClose={() => setWorkbenchOpen(false)} onChange={onChange} onApply={onApply} onDeleteImageNode={() => undefined} onFlush={onFlush} planPreview={plan} />
             ) : null}
         </div>
     );

@@ -30,9 +30,10 @@ import { useDirectorWorkbenchStore } from "@/stores/canvas/use-director-workbenc
 import { useActiveTheme } from "@/stores/canvas/use-canvas-theme-store";
 import type { CanvasNodeData } from "@/types/canvas";
 import type { DirectorCamera, DirectorCameraMove, DirectorHumanoidBone, DirectorKeyframeDeleteTarget, DirectorKeyframeEasing, DirectorLight, DirectorObject, DirectorPose, DirectorQuat, DirectorRenderMode, DirectorRig, DirectorScene, DirectorSceneOutput, DirectorShot, DirectorShotSize, DirectorTransform, DirectorVec3 } from "@/types/director";
+import type { DirectorPlan } from "@/lib/canvas/director/director-document";
 import { Select } from "@/components/ui/base/select";
 
-export function CanvasDirectorWorkbench({ open, scene, imageNodes, onboardingScope, onClose, onChange, onApply, onDeleteImageNode, onFlush }: { open: boolean; scene: DirectorScene | null; imageNodes: CanvasNodeData[]; onboardingScope: string; onClose: () => void; onChange: (scene: DirectorScene) => void; onApply: (output: DirectorSceneOutput) => Promise<void>; onDeleteImageNode: (nodeId: string) => void; onFlush?: () => void | Promise<void> }) {
+export function CanvasDirectorWorkbench({ open, scene, imageNodes, onboardingScope, onClose, onChange, onApply, onDeleteImageNode, onFlush, planPreview }: { open: boolean; scene: DirectorScene | null; imageNodes: CanvasNodeData[]; onboardingScope: string; onClose: () => void; onChange: (scene: DirectorScene) => void; onApply: (output: DirectorSceneOutput) => Promise<void>; onDeleteImageNode: (nodeId: string) => void; onFlush?: () => void | Promise<void>; planPreview?: DirectorPlan | null }) {
     const { message, modal } = App.useApp();
     const theme = canvasThemes[useActiveTheme()];
     const viewportRef = useRef<DirectorViewportHandle>(null);
@@ -772,7 +773,7 @@ export function CanvasDirectorWorkbench({ open, scene, imageNodes, onboardingSco
                 </aside>
 
                 <main className="relative min-h-0 overflow-hidden bg-neutral-900">
-                    <DirectorViewport ref={viewportRef} scene={draft} selectedObjectId={selectedObjectId} selectedBone={selectedBone} transformMode={transformMode} renderMode={renderMode} playhead={playhead} playing={playing} showMotionPaths={capabilities.timeline} viewMode={viewMode} onViewModeChange={setViewMode} onSelectObject={setSelectedObjectId} onSelectBone={setSelectedBone} onObjectTransform={handleObjectTransform} onBoneTransform={handleBoneTransform} onActorRigReady={handleActorRigReady} />
+                    <DirectorViewport ref={viewportRef} scene={draft} selectedObjectId={selectedObjectId} selectedBone={selectedBone} transformMode={transformMode} renderMode={renderMode} playhead={playhead} playing={playing} planPreview={planPreview} showMotionPaths={capabilities.timeline} viewMode={viewMode} onViewModeChange={setViewMode} onSelectObject={setSelectedObjectId} onSelectBone={setSelectedBone} onObjectTransform={handleObjectTransform} onBoneTransform={handleBoneTransform} onActorRigReady={handleActorRigReady} />
                     <div className="pointer-events-none absolute left-3 top-3 text-[var(--fs-tiny)] font-medium text-white/70">{activeShot.name} · {activeCamera?.name || "无摄影机"} · {activeShot.duration}s</div>
                     <CanvasDirectorOnboarding scope={onboardingScope} open={open} restartSignal={onboardingRestartSignal} className="absolute right-3 top-3 z-[var(--z-popover)] w-[min(360px,calc(100%-24px))]" />
                     <DirectorViewportDock transformMode={transformMode} renderMode={renderMode} renderModes={capabilities.renderModes} onTransformModeChange={setTransformMode} onRenderModeChange={setRenderMode} onAddActor={addActor} onAddBox={() => addPrimitive("box", "立方体")} onAddLight={addLight} onAddCamera={addCamera} onAlignCamera={alignCameraToView} />
