@@ -390,6 +390,28 @@ func (s *Service) processCanvasGenerationTask(ctx context.Context, userID string
 	if strings.TrimSpace(input.Prompt) == "" {
 		return nil, errors.New("prompt is required")
 	}
+	// 视频提交前的 H3 改写（创作页等非分鏰路径）：改写必须发生在 mention 令牌解析之前，
+	// 否则 @图片N 先被展开成资源文本，span 机械验证就无从比对。任何失败降级直通原始
+	// prompt，永不拦渲染（G1 契约，见 h3_rewrite.go）。
+	if input.Mode == "video" {
+		if rewritten, skipReason := s.maybeRewriteVideoPromptH3(ctx, input.Prompt, input.Metadata); rewritten != "" {
+			input.Prompt = rewritten
+			if input.Metadata == nil {
+				input.Metadata = map[string]interface{}{}
+			}
+			input.Metadata["h3Formatted"] = true
+		} else if skipReason != "" {
+			if input.Metadata == nil {
+				input.Metadata = map[string]interface{}{}
+			}
+			input.Metadata["h3RewriteSkipped"] = true
+			input.Metadata["h3RewriteSkipReason"] = skipReason
+			// s.log 依赖仓储；字面量 Service 的单测里只留 metadata 标记即可。
+			if s.repo != nil {
+				_ = s.log(userID, taskExecutionID(ctx), "warn", "视频提示词 H3 改写降级，直通原始提示词", skipReason)
+			}
+		}
+	}
 	// 将 @[tool:type:ID:label:icon] 令牌替换为对应工具的提示词文本
 	resolved, err := s.ResolveToolMentionTokens(userID, input.Mode, input.Prompt)
 	if err != nil {
