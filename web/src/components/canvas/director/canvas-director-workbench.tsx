@@ -3,6 +3,7 @@ import { Switch } from "@/components/ui/base/switch";
 import type { MenuProps } from "antd";
 import { Box, BoxSelect, Camera, Circle, Cuboid, FileUp, Focus, Image as ImageIcon, LampDesk, Lightbulb, PersonStanding, Plus, Redo2, RotateCcw, Save, Trash2, Undo2, UserRound, Video, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { nanoid } from "nanoid";
 import { Euler, Quaternion } from "three";
 import type { AnimationClip } from "three";
@@ -707,7 +708,10 @@ export function CanvasDirectorWorkbench({ open, scene, imageNodes, onboardingSco
 
     if (!open || !draft || !activeShot) return null;
 
-    return (
+    // portal 到 body：本组件挂在 .canvas-editor-shell（z-index:0 的层叠上下文）里，
+    // 而 .canvas-workspace-shell 是同层 z-index:2，fixed+z-500 在子上下文里赢不了它，
+    // 侧栏会盖住导演台左栏。portal 出去才真正全屏。
+    return createPortal(
         <div data-canvas-no-zoom className="fixed inset-0 z-[var(--z-toast)] flex min-h-0 flex-col overflow-hidden" style={{ background: theme.canvas.background, color: theme.node.text }}>
             <header className="thin-scrollbar flex h-12 shrink-0 items-center gap-2 overflow-x-auto overflow-y-hidden border-b px-2" style={{ background: theme.toolbar.panel, borderColor: theme.toolbar.border }}>
                 <IconButton label="关闭导演台" onClick={closeWorkbench}><X className="size-4" /></IconButton>
@@ -805,7 +809,8 @@ export function CanvasDirectorWorkbench({ open, scene, imageNodes, onboardingSco
 
             {/* 时间轴只属于动画模式：其他模式下它不渲染，Auto Key 与录制入口一并消失。 */}
             {capabilities.timeline ? <DirectorSequencer scene={draft} shot={activeShot} camera={activeCamera} objects={draft.objects} selectedObjectId={selectedObjectId} selectedBone={selectedBone} playhead={playhead} playing={playing} autoKey={autoKey} height={sequencerHeight} visible={sequencerVisible} onPlayToggle={() => setPlaying(!playing)} onPlayheadChange={setPlayhead} onAutoKeyChange={setAutoKey} onHeightChange={setSequencerHeight} onVisibilityChange={setSequencerVisible} onSelectObject={setSelectedObjectId} onSelectBone={setSelectedBone} onRecordKeyframe={recordSelectedKeyframe} onAddShot={addShot} onDeleteKeyframe={deleteKeyframe} onSetKeyframeEasing={setKeyframeEasing} onSelectShot={(id) => { commit((current) => ({ ...current, activeShotId: id })); setPlayhead(0); }} /> : null}
-        </div>
+        </div>,
+        document.body
     );
 }
 
