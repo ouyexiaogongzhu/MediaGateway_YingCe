@@ -147,7 +147,10 @@ func DefaultRuntimePolicy() RuntimePolicySetting {
 			WorkerConcurrency:        effectiveChannelConcurrencyLimit(envInt("CANVAS_WORKER_CONCURRENCY", TaskWorkerConcurrency)),
 			ChannelConcurrency:       defaultChannelConcurrencyLimit(),
 			ActiveTaskLimit:          5,
-			ImageTimeoutMinutes:      24,
+			// 45 不是隨手填的：實測 canvas_image 成功 277 筆平均 3.4 分、最長 21.2 分，
+	// 舊值 24 剛好壓在分佈尾部上，於是每個批次裡最慢的幾張被砍（139 筆失敗的
+	// 上限全部正好 24.0）。45 對實測最長值留一倍以上餘裕。
+	ImageTimeoutMinutes:      45,
 			TextTimeoutMinutes:       8,
 			AudioTimeoutMinutes:      8,
 			VideoTimeoutMinutes:      60,

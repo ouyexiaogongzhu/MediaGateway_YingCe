@@ -551,8 +551,12 @@ export function saveProjectShot(projectId: string, input: { id?: string; unitId?
     return http.post<{ shot: ProjectShot }>(`/projects/${encodeURIComponent(projectId)}/shots`, input);
 }
 
-export function renderProjectShot(projectId: string, shotId: string, input: { musicPrompt?: string; draft?: boolean } = {}) {
-    return http.post<{ shotId: string; position: number; jobId: string; videoPath: string; videoArtifactId: string; lastFramePath?: string; lastFrameArtifactId?: string }>(`/projects/${encodeURIComponent(projectId)}/shots/${encodeURIComponent(shotId)}/render`, input);
+export function renderProjectShot(projectId: string, shotId: string, input: { musicPrompt?: string; draft?: boolean; sfxTags?: string[] } = {}) {
+    // sfxTags 走請求而非資料庫（ShotRevision 沒這欄位）；單鏡頭端點只需要本鏡頭的。
+    return http.post<{ shotId: string; position: number; jobId: string; videoPath: string; videoArtifactId: string; lastFramePath?: string; lastFrameArtifactId?: string; voiceSkipped?: boolean }>(`/projects/${encodeURIComponent(projectId)}/shots/${encodeURIComponent(shotId)}/render`, {
+        ...input,
+        sfxTags: input.sfxTags?.length ? { [shotId]: input.sfxTags } : undefined,
+    });
 }
 
 export function deleteProjectShot(projectId: string, shotId: string) {

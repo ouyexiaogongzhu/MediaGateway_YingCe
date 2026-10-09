@@ -27,6 +27,11 @@ type RenderAllShotsRequest struct {
 	// 不传会让首帧落 qwen_image 的 1024x1024 缺省——那是实测会死锁的尺寸。
 	Width  int `json:"width"`
 	Height int `json:"height"`
+	// SfxTags：shotId → 擬音標籤（前端從分鏡行帶下來）。
+	// 走請求而不是資料庫：sfxTags 從來不落庫（ShotRevision 沒這欄位），但前端
+	// 一直有、而且 LLM 的詞表是凍結的 40 值枚舉——把結構化欄位塞進 prompt 散文
+	// 再用正則解析回來是退步。
+	SfxTags map[string][]string `json:"sfxTags,omitempty"`
 }
 
 // shotRenderSize 缺省画幅。首帧与视频必须同幅：首帧会被 h3 缩到视频画布，
@@ -260,6 +265,9 @@ func (s *Service) renderProjectShot(ctx context.Context, gateway *gatewayClient,
 		} else {
 			voiceSkipped = true
 		}
+	}
+	if tags := req.SfxTags[shot.ID]; len(tags) > 0 {
+		params["sfx"] = tags
 	}
 	if musicPrompt := strings.TrimSpace(req.MusicPrompt); musicPrompt != "" && !req.Draft {
 		music := map[string]any{"prompt": musicPrompt}

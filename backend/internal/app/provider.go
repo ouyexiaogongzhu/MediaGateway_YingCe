@@ -319,6 +319,11 @@ func providerPayloadErrorCategory(raw string) (string, bool) {
 	case strings.Contains(normalized, "must be followed by tool messages"),
 		strings.Contains(normalized, "insufficient tool messages following"):
 		return "会话里的工具调用与结果不匹配，本轮已停止；这不是额度或提示词问题，如反复出现请反馈", true
+	case strings.Contains(normalized, "insufficient memory"), strings.Contains(normalized, "outofmemory"),
+		strings.Contains(normalized, "kIOGPUCommandBufferCallbackErrorOutOfMemory"):
+		// Metal/compute OOM 上游报 "Insufficient Memory"，含 "insufficient"——必须排在
+		// 额度类目之前，否则 GPU 内存不足会被误报成"渠道额度不足"，用户去查余额就错了。
+		return "模型服务显存不足（GPU 内存耗尽）；请等正在运行的视频/生图任务完成后再试", true
 	case strings.Contains(normalized, "quota"), strings.Contains(normalized, "insufficient"), strings.Contains(normalized, "balance"), strings.Contains(normalized, "billing"):
 		return "模型服务额度不足，请检查渠道余额或配额", true
 	case strings.Contains(normalized, "model") && (strings.Contains(normalized, "not found") || strings.Contains(normalized, "permission") || strings.Contains(normalized, "access")):

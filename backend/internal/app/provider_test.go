@@ -3079,3 +3079,18 @@ func TestRunMiniMaxVideoTaskReturnsFailureReason(t *testing.T) {
 		t.Fatalf("runVideoTask() error = %v", err)
 	}
 }
+
+func TestMetalOOMIsNotQuota(t *testing.T) {
+	// omlx 的 Metal OOM 报 "Insufficient Memory"，旧分类器按 contains("insufficient")
+	// 撞进额度类目——用户去查渠道余额，方向完全错。
+	got, fatal := providerPayloadErrorCategory("[METAL] Command buffer execution failed: Insufficient Memory (00000008:kIOGPUCommandBufferCallbackErrorOutOfMemory).")
+	if !fatal {
+		t.Fatal("OOM should be fatal-classified")
+	}
+	if want := "显存不足"; !strings.Contains(got, want) {
+		t.Fatalf("got %q, want it to contain %q", got, want)
+	}
+	if strings.Contains(got, "额度") {
+		t.Fatalf("OOM must not be reported as quota: %q", got)
+	}
+}

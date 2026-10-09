@@ -497,3 +497,33 @@ func TestRenderProjectShotReportsVoiceSkipped(t *testing.T) {
 		t.Fatal("no voice stage may be sent when no voice binding exists")
 	}
 }
+
+func TestRenderProjectShotPassesSfxTagsToGateway(t *testing.T) {
+	// sfxTags 走請求而不是資料庫：ShotRevision 沒有這欄位，但前端分鏡行一直有，
+	// 而且 LLM 詞表是凍結的 40 值枚舉——塞進 prompt 散文再解析回來是退步。
+	service, gateway := newRenderAllTestService(t)
+	_, err := service.RenderProjectShot(context.Background(), "user-render", "project-render", "shot-1",
+		RenderAllShotsRequest{SfxTags: map[string][]string{"shot-1": {"ambience_rain", "thunder"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// sfx 是頂層參數（與 image/video 同級），不是塞在 video 裡
+	sfx, ok := gateway.submitted(t, "shot")[0]["sfx"].([]any)
+	if !ok || len(sfx) != 2 {
+		t.Fatalf("sfx = %#v, want 2 tags", gateway.submitted(t, "shot")[0]["sfx"])
+	}
+	if sfx[0] != "ambience_rain" || sfx[1] != "thunder" {
+		t.Fatalf("sfx = %#v", sfx)
+	}
+}
+
+func TestRenderProjectShotWithoutSfxTagsSendsNone(t *testing.T) {
+	service, gateway := newRenderAllTestService(t)
+	if _, err := service.RenderProjectShot(context.Background(), "user-render", "project-render", "shot-1",
+		RenderAllShotsRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, has := gateway.submitted(t, "shot")[0]["sfx"]; has {
+		t.Fatal("sfx must be absent when the caller sends none")
+	}
+}
