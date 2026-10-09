@@ -547,12 +547,16 @@ async function taskTextStreamHTTPError(response: Response) {
     return `任务文本流请求失败（HTTP ${response.status}）`;
 }
 
-function taskWaitTimeoutMs(task?: GenerationTask) {
+// 与后端 DB runtime_policy 对齐（默认值见 backend/internal/platform/runtime_policy.go）。
+// 政策只有 /admin/settings/runtime-policy（管理员端点）可读，普通端点拿不到，这里硬编码兜底：
+// 管理员在后台改超时后此表会漂移，改后端政策时须同步这里。
+// video 用线上 DB 值 200（源码默认 60）；客户端超时只代表"不再轮询"，超了也不清 taskId（P0-4）。
+export function taskWaitTimeoutMs(task?: GenerationTask) {
     const type = task?.type || "";
-    if (type.includes("storyboard")) return 13 * 60 * 1000;
-    if (type.includes("video")) return 32 * 60 * 1000;
-    if (type.includes("image")) return 10 * 60 * 1000;
-    if (type.includes("text") || type.includes("audio")) return 12 * 60 * 1000;
+    if (type.includes("storyboard")) return 20 * 60 * 1000;
+    if (type.includes("video")) return 200 * 60 * 1000;
+    if (type.includes("image")) return 45 * 60 * 1000;
+    if (type.includes("text") || type.includes("audio")) return 8 * 60 * 1000;
     return 10 * 60 * 1000;
 }
 

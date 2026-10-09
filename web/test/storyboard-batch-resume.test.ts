@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import { batchTaskStillActive, pendingStoryboardMusicRows, pendingStoryboardVideoRows, shouldRetainBatchTaskId } from "../src/pages/canvas/use-canvas-storyboard";
 import { ApiError } from "../src/services/api/request";
-import { TaskWaitTimeoutError, type GenerationTask } from "../src/services/api/task-center";
+import { taskWaitTimeoutMs, TaskWaitTimeoutError, type GenerationTask } from "../src/services/api/task-center";
 import type { StoryboardRow } from "../src/types/canvas";
 
 function row(id: string, musicGroupId?: string): StoryboardRow {
@@ -92,5 +92,30 @@ describe("batchTaskStillActive", () => {
         expect(batchTaskStillActive(task("failed"))).toBe(false);
         expect(batchTaskStillActive(task("cancelled"))).toBe(false);
         expect(batchTaskStillActive(undefined)).toBe(false);
+    });
+});
+
+describe("taskWaitTimeoutMs", () => {
+    // 与 backend/internal/platform/runtime_policy.go 的 DB runtime_policy 对齐；
+    // 客户端早于后端放弃 = 批次行冻结在进度 UI 里（image 10min 曾砍掉每批最慢的镜头）。
+    function typed(type: string): GenerationTask {
+        return { id: "t1", type, status: "running", prompt: "" } as unknown as GenerationTask;
+    }
+    const min = 60 * 1000;
+
+    test("image 45min ≥ 后端上限（曾用 10min 提前放弃还在渲染的任务）", () => {
+        expect(taskWaitTimeoutMs(typed("image_generation"))).toBe(45 * min);
+    });
+
+    test("video 用线上 DB 值 200min（源码默认 60）", () => {
+        expect(taskWaitTimeoutMs(typed("video_generation"))).toBe(200 * min);
+    });
+
+    test("storyboard 20min / text・audio 8min / 未知 10min 与后端默认一致", () => {
+        expect(taskWaitTimeoutMs(typed("storyboard_video_batch"))).toBe(20 * min);
+        expect(taskWaitTimeoutMs(typed("text_generation"))).toBe(8 * min);
+        expect(taskWaitTimeoutMs(typed("audio_generation"))).toBe(8 * min);
+        expect(taskWaitTimeoutMs(typed("something_else"))).toBe(10 * min);
+        expect(taskWaitTimeoutMs(undefined)).toBe(10 * min);
     });
 });

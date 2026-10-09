@@ -19,9 +19,15 @@ import (
 const StoryboardContractInstruction = `將以下劇本拆解為分鏰行。只輸出 JSON 對象（{"shots":[...]}），首字符 { 尾字符 }，禁止任何解釋、前言、Markdown 或散文。
 要求：按時間軸連續切分覆蓋全片（每鏡 5–15 秒），shots 數組完整覆蓋到結尾，不得提前收束。
 每行欄位：timeRange, shotType, camera, characters, action, dialogue, voiceMode, sfxTags, musicGroupId, visualPrompt, videoPrompt。
+輸出前逐對相鄰分鏰核對物理狀態連續性：後一鏡 description 的服裝狀態、姿勢、位置與道具必須承接前一鏡 continuityOut 交接（如「A的手移向B腰側」）所隱含的結果，並持續為每鏡填寫 continuityOut 作為下一鏡的交接依據。
+發現矛盾時修正較後一鏡的 description 使其承接前一鏡，不得憑空新增道具或讓角色瞬移。
 劇本：`
 
 const storyboardRowsTaskTimeout = 1800 * time.Second
+
+// storyboardRowDefaultDurationSeconds 宿主兜底时长（秒）：模型行缺 durationSeconds 且
+// timeRange 不可解析时使用，与前端新建行默认值一致（canvas-script-node 新增行 6s）。
+const storyboardRowDefaultDurationSeconds = 6.0
 
 // runStoryboardTextTask 是 canvas_text + operation=storyboard 的正文执行包装：
 // 输出抽不出 ≥1 条分镜行时带着错误反馈后缀重试（共 3 次尝试），全部失败才把
@@ -82,11 +88,25 @@ func normalizeStoryboardTaskText(result map[string]interface{}, text string) {
 		rows = plan.Rows
 	}
 	normalized := make([]map[string]any, 0, len(rows))
+	// 宿主拥有结构字段：shotNumber 一律按保留行序由宿主赋值，绝不读模型值（模型自编
+	// 号曾与前端键位失配造成静默重排；模型 shotNumber 已被 scriptToStoryboardRow 白名单
+	// 丢弃）；durationSeconds 缺失或非正数时宿主从 timeRange 推导，仍无则取项目默认时长。
+	shotNumber := 0.0
 	for _, raw := range rows {
 		if raw == nil {
 			continue
 		}
+		shotNumber++
 		row := scriptToStoryboardRow(raw)
+		row["shotNumber"] = shotNumber
+		if seconds, ok := row["durationSeconds"].(float64); !ok || seconds <= 0 {
+			delete(row, "durationSeconds")
+			if derived, ok := scriptStoryboardSeconds(raw); ok {
+				row["durationSeconds"] = derived
+			} else {
+				row["durationSeconds"] = storyboardRowDefaultDurationSeconds
+			}
+		}
 		// assetRefs 无法安全映射成前端 StoryboardAssetBinding（{nodeId,role,priority}，
 		// nodeId 需查资产库），以原字段名透传保数据不丢；前端暂不读，映射缺口待补。
 		for _, key := range []string{"sfxTags", "mustHave", "optionalDetails", "voiceMode", "musicGroupId", "musicMood", "assetRefs"} {
@@ -107,6 +127,9 @@ func normalizeStoryboardTaskText(result map[string]interface{}, text string) {
 		normalized = append(normalized, row)
 	}
 	out := map[string]any{"rows": normalized}
+	// 行出生即 H3 格式（videoPrompt 规则已注入 storyboard_plan 受保护契约），打标记供
+	// 下游/前端识别格式代次；归一失败时不打（走旧格式路径）。
+	out["h3Formatted"] = true
 	if strings.TrimSpace(plan.Title) != "" {
 		out["title"] = plan.Title
 	}
@@ -135,8 +158,10 @@ func storyboardCharacterRefs(value any) any {
 }
 
 // shouldRetryStoryboardOutput 判定模型输出是否缺少可解析的分镜行（true = 需要重试）。
-// 宽松成功标准：正文能抽出 JSON，且为含 ≥1 个元素的 shots/rows 数组的对象，或本身就是
-// ≥1 个元素的裸数组（ScriptToStoryboardText 同样接受裸数组）。
+// 只有产出 ZERO 条可解析行才重试（分层修复：缺 shotNumber/缺 dialogue/缺时长都不是
+// 缺陷——宿主补齐，见 normalizeStoryboardTaskText）；行内容结构漂移（如 title/logline
+// 开头的异形 JSON）解析不出 shots/rows 时同样视为零行。宽松成功标准：正文能抽出
+// JSON，且为含 ≥1 个元素的 shots/rows 数组的对象，或本身就是 ≥1 个元素的裸数组。
 func shouldRetryStoryboardOutput(text string) bool {
 	jsonText, err := extractPreferredJSONText(text, "shots")
 	if err != nil {
@@ -150,59 +175,13 @@ func shouldRetryStoryboardOutput(text string) bool {
 		Rows  []json.RawMessage `json:"rows"`
 	}
 	if json.Unmarshal([]byte(jsonText), &plan) == nil {
-		if len(plan.Shots) == 0 && len(plan.Rows) == 0 {
-			return true
-		}
-		return !storyboardRowsHaveTimeRange(jsonText)
+		return len(plan.Shots)+len(plan.Rows) == 0
 	}
 	var rows []json.RawMessage
 	if json.Unmarshal([]byte(jsonText), &rows) == nil {
-		if len(rows) == 0 {
-			return true
-		}
-		return !storyboardRowsHaveTimeRange(jsonText)
+		return len(rows) == 0
 	}
 	return true
-}
-
-// storyboardRowsHaveTimeRange：行陣列中至少一行需帶 timeRange 或 durationSeconds。
-// json_schema 硬約束 required 的是 durationSeconds（無 timeRange），門若只認 timeRange
-// 會永不過、每次燒滿 3 次重試（3× 牆鐘）。兩者任一 = 結構正確。
-// 缺失 = 結構漂移（如 title/logline 開頭的異形 JSON），觸發帶錯誤反饋的重試。
-func storyboardRowsHaveTimeRange(jsonText string) bool {
-	hasCore := func(row map[string]any) bool {
-		if _, ok := row["timeRange"]; ok {
-			return true
-		}
-		_, ok := row["durationSeconds"]
-		return ok
-	}
-	var withKeys struct {
-		Shots []map[string]any `json:"shots"`
-		Rows  []map[string]any `json:"rows"`
-	}
-	if err := json.Unmarshal([]byte(jsonText), &withKeys); err == nil {
-		for _, row := range withKeys.Shots {
-			if hasCore(row) {
-				return true
-			}
-		}
-		for _, row := range withKeys.Rows {
-			if hasCore(row) {
-				return true
-			}
-		}
-		return false
-	}
-	var rows []map[string]any
-	if json.Unmarshal([]byte(jsonText), &rows) == nil {
-		for _, row := range rows {
-			if _, ok := row["timeRange"]; ok {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func (s *Service) GenerateStoryboardRows(ctx context.Context, userID, canvasID, sourceNodeID, model, logicalModelID string) (map[string]any, error) {
