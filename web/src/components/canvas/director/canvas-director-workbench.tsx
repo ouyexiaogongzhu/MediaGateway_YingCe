@@ -8,6 +8,7 @@ import { Euler, Quaternion } from "three";
 import type { AnimationClip } from "three";
 
 import { CanvasDirectorOnboarding } from "@/components/canvas/director/canvas-director-onboarding";
+import { DirectorAiPanel } from "@/components/canvas/director/canvas-director-ai-panel";
 import { DirectorViewport, type DirectorViewportHandle } from "@/components/canvas/director/director-viewport";
 import { DirectorViewportDock } from "@/components/canvas/director/director-viewport-dock";
 import { DirectorSequencer } from "@/components/canvas/director/director-sequencer";
@@ -30,10 +31,10 @@ import { useDirectorWorkbenchStore } from "@/stores/canvas/use-director-workbenc
 import { useActiveTheme } from "@/stores/canvas/use-canvas-theme-store";
 import type { CanvasNodeData } from "@/types/canvas";
 import type { DirectorCamera, DirectorCameraMove, DirectorHumanoidBone, DirectorKeyframeDeleteTarget, DirectorKeyframeEasing, DirectorLight, DirectorObject, DirectorPose, DirectorQuat, DirectorRenderMode, DirectorRig, DirectorScene, DirectorSceneOutput, DirectorShot, DirectorShotSize, DirectorTransform, DirectorVec3 } from "@/types/director";
-import type { DirectorPlan } from "@/lib/canvas/director/director-document";
+import { applyDocumentToScene, type DirectorPlan, type DirectorPlanItem } from "@/lib/canvas/director/director-document";
 import { Select } from "@/components/ui/base/select";
 
-export function CanvasDirectorWorkbench({ open, scene, imageNodes, onboardingScope, onClose, onChange, onApply, onDeleteImageNode, onFlush, planPreview }: { open: boolean; scene: DirectorScene | null; imageNodes: CanvasNodeData[]; onboardingScope: string; onClose: () => void; onChange: (scene: DirectorScene) => void; onApply: (output: DirectorSceneOutput) => Promise<void>; onDeleteImageNode: (nodeId: string) => void; onFlush?: () => void | Promise<void>; planPreview?: DirectorPlan | null }) {
+export function CanvasDirectorWorkbench({ open, scene, imageNodes, onboardingScope, onClose, onChange, onApply, onDeleteImageNode, onFlush, planPreview: planPreviewProp }: { open: boolean; scene: DirectorScene | null; imageNodes: CanvasNodeData[]; onboardingScope: string; onClose: () => void; onChange: (scene: DirectorScene) => void; onApply: (output: DirectorSceneOutput) => Promise<void>; onDeleteImageNode: (nodeId: string) => void; onFlush?: () => void | Promise<void>; planPreview?: DirectorPlan | null }) {
     const { message, modal } = App.useApp();
     const theme = canvasThemes[useActiveTheme()];
     const viewportRef = useRef<DirectorViewportHandle>(null);
@@ -44,6 +45,11 @@ export function CanvasDirectorWorkbench({ open, scene, imageNodes, onboardingSco
     const [saving, setSaving] = useState(false);
     const [recording, setRecording] = useState(false);
     const [onboardingRestartSignal, setOnboardingRestartSignal] = useState(0);
+    // AI 导演：方案历史 + 本面板产生的预演（prop 优先，供复现台注入）。
+    const [aiPlans, setAiPlans] = useState<DirectorPlanItem[]>([]);
+    const [internalPlan, setInternalPlan] = useState<DirectorPlan | null>(null);
+    const [activePlanId, setActivePlanId] = useState<string | null>(null);
+    const planPreview = planPreviewProp ?? internalPlan;
     const mode = useDirectorWorkbenchStore((state) => state.mode);
     const viewMode = useDirectorWorkbenchStore((state) => state.viewMode);
     const setViewMode = useDirectorWorkbenchStore((state) => state.setViewMode);
@@ -750,6 +756,18 @@ export function CanvasDirectorWorkbench({ open, scene, imageNodes, onboardingSco
 
             <div className="grid min-h-0 flex-1 grid-cols-[220px_minmax(0,1fr)_292px] max-lg:grid-cols-[180px_minmax(0,1fr)]">
                 <aside className="thin-scrollbar min-h-0 overflow-y-auto border-r" style={{ background: theme.node.panel, borderColor: theme.toolbar.border }}>
+                    <DirectorAiPanel
+                        scene={draft}
+                        imageNodes={imageNodes}
+                        plans={aiPlans}
+                        onPlansChange={setAiPlans}
+                        onDraft={({ scene: draftScene, plan }) => {
+                            commit((current) => applyDocumentToScene(current, draftScene));
+                            setInternalPlan(plan);
+                        }}
+                        onPreview={(plan, id) => { setInternalPlan(plan); setActivePlanId(id); setPlayhead(0); }}
+                        activePlanId={activePlanId}
+                    />
                     <PanelTitle title="场景对象" action={<AddMenuButton label="添加场景对象" items={addObjectMenuItems} />} />
                     <div className="px-2 pb-2">
                         {draft.objects.map((object) => <SceneRow key={object.id} active={selectedObjectId === object.id} icon={object.kind === "actor" || object.primitive === "character" ? <UserRound /> : object.kind === "mannequin" ? <PersonStanding /> : object.kind === "model" ? <BoxSelect /> : object.kind === "billboard" ? <ImageIcon /> : <Cuboid />} label={object.name} onClick={() => setSelectedObjectId(object.id)} onDelete={() => removeObject(object.id)} />)}
