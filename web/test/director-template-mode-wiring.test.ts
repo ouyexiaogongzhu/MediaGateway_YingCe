@@ -88,7 +88,7 @@ describe("模式接线", () => {
 
     test("动画模式把 Transform 轨迹接入视口，隐藏演员和零长度轨迹不显示", () => {
         expect(workbench).toContain("showMotionPaths={capabilities.timeline}");
-        expect(viewport).toContain('object.visible && (object.kind === "actor" || object.primitive === "character")');
+        expect(viewport).toContain('object.visible && (object.kind === "actor" || object.kind === "mannequin" || object.primitive === "character")');
         expect(viewport).toContain("directorTransformPathLength(object.keyframes) > 0.001");
         expect(viewport).toContain("<Line points={points}");
         expect(viewport).toContain("interpolateDirectorTransform(sorted[0].transform, sorted, playhead).position");

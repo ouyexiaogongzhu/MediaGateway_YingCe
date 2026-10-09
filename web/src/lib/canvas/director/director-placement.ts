@@ -12,7 +12,7 @@ const SAMPLES_PER_RING = 12;
 const MODEL_FOOTPRINT = 2;
 
 function baseFootprint(object: Pick<DirectorObject, "kind" | "primitive">): DirectorFootprint {
-    if (object.kind === "actor" || object.primitive === "character") return { width: 0.8, depth: 0.8 };
+    if (object.kind === "actor" || object.kind === "mannequin" || object.primitive === "character") return { width: 0.8, depth: 0.8 };
     if (object.kind === "model") return { width: MODEL_FOOTPRINT, depth: MODEL_FOOTPRINT };
     if (object.kind === "billboard" || object.primitive === "plane") return { width: 1.6, depth: 0.3 };
     if (object.primitive === "sphere") return { width: 1.2, depth: 1.2 };

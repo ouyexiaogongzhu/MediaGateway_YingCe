@@ -1,7 +1,7 @@
 import { App, Button, ColorPicker, Dropdown, Input, InputNumber, Slider } from "antd";
 import { Switch } from "@/components/ui/base/switch";
 import type { MenuProps } from "antd";
-import { Box, BoxSelect, Camera, Circle, Cuboid, FileUp, Focus, Image as ImageIcon, LampDesk, Lightbulb, Plus, Redo2, RotateCcw, Save, Trash2, Undo2, UserRound, Video, X } from "lucide-react";
+import { Box, BoxSelect, Camera, Circle, Cuboid, FileUp, Focus, Image as ImageIcon, LampDesk, Lightbulb, PersonStanding, Plus, Redo2, RotateCcw, Save, Trash2, Undo2, UserRound, Video, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
 import { nanoid } from "nanoid";
 import { Euler, Quaternion } from "three";
@@ -20,7 +20,7 @@ import { DIRECTOR_MODES, directorModeCapabilities, type DirectorModeCapabilities
 import { resolveDirectorPlacement, resolveDirectorPlacementAnchor } from "@/lib/canvas/director/director-placement";
 import { isDirectorOutputSnapshotCurrent, shouldReinitializeDirectorSession } from "@/lib/canvas/director/director-session";
 import { blocksDirectorShortcut, releaseDirectorFocusAfterPointer, resolveDirectorShortcut, type DirectorShortcutAction } from "@/lib/canvas/director/director-shortcuts";
-import { createDirectorActor, createDirectorBillboard, createDirectorCamera, createDirectorLight, createDirectorModel, createDirectorObject, DIRECTOR_ACTOR_COLORS, directorBoneLabel, directorFocalLengthToFov, directorPoseLabel, interpolateDirectorTransform, removeDirectorSceneKeyframe, setDirectorSceneKeyframeEasing, touchDirectorScene, upsertDirectorBoneKeyframe } from "@/lib/canvas/director/director-scene";
+import { createDirectorActor, createDirectorBillboard, createDirectorCamera, createDirectorLight, createDirectorMannequin, createDirectorModel, createDirectorObject, DIRECTOR_ACTOR_COLORS, directorBoneLabel, directorFocalLengthToFov, directorPoseLabel, interpolateDirectorTransform, removeDirectorSceneKeyframe, setDirectorSceneKeyframeEasing, touchDirectorScene, upsertDirectorBoneKeyframe } from "@/lib/canvas/director/director-scene";
 import { describeDirectorSaveStatus, resolveDirectorCloseOutcome, shouldBlockDirectorUnload, shouldOfferDirectorDraftRecovery } from "@/lib/canvas/director/director-save-wiring";
 import { useDirectorSaveCoordinator } from "@/components/canvas/director/use-director-save-coordinator";
 import { uploadMediaFile } from "@/services/file-storage";
@@ -415,6 +415,11 @@ export function CanvasDirectorWorkbench({ open, scene, imageNodes, onboardingSco
         addObject(createDirectorActor(`演员 ${actorCount + 1}`, [0, 0, 0], DIRECTOR_ACTOR_COLORS[actorCount % DIRECTOR_ACTOR_COLORS.length]));
     };
 
+    const addMannequin = () => {
+        const mannequinCount = draft?.objects.filter((item) => item.kind === "mannequin").length || 0;
+        addObject(createDirectorMannequin(`人偶 ${mannequinCount + 1}`, [0, 0, 0], DIRECTOR_ACTOR_COLORS[mannequinCount % DIRECTOR_ACTOR_COLORS.length]));
+    };
+
     const addModelAsset = (asset: ModelAsset) => addObject(createDirectorModel({ name: asset.title, assetId: asset.id, storageKey: asset.data.storageKey, url: asset.data.url, mimeType: asset.data.mimeType }));
 
     const uploadModel = async (file?: File) => {
@@ -459,6 +464,7 @@ export function CanvasDirectorWorkbench({ open, scene, imageNodes, onboardingSco
     ];
     const addObjectMenuItems: MenuProps["items"] = [
         { key: "actor", icon: <UserRound className="size-3.5" />, label: "演员", onClick: addActor },
+        { key: "mannequin", icon: <PersonStanding className="size-3.5" />, label: "关节人偶", onClick: addMannequin },
         { key: "box", icon: <Box className="size-3.5" />, label: "立方体", onClick: () => addPrimitive("box", "立方体") },
         { key: "sphere", icon: <Circle className="size-3.5" />, label: "球体", onClick: () => addPrimitive("sphere", "球体") },
         { key: "cylinder", icon: <Cuboid className="size-3.5" />, label: "圆柱", onClick: () => addPrimitive("cylinder", "圆柱") },
@@ -745,7 +751,7 @@ export function CanvasDirectorWorkbench({ open, scene, imageNodes, onboardingSco
                 <aside className="thin-scrollbar min-h-0 overflow-y-auto border-r" style={{ background: theme.node.panel, borderColor: theme.toolbar.border }}>
                     <PanelTitle title="场景对象" action={<AddMenuButton label="添加场景对象" items={addObjectMenuItems} />} />
                     <div className="px-2 pb-2">
-                        {draft.objects.map((object) => <SceneRow key={object.id} active={selectedObjectId === object.id} icon={object.kind === "actor" || object.primitive === "character" ? <UserRound /> : object.kind === "model" ? <BoxSelect /> : object.kind === "billboard" ? <ImageIcon /> : <Cuboid />} label={object.name} onClick={() => setSelectedObjectId(object.id)} onDelete={() => removeObject(object.id)} />)}
+                        {draft.objects.map((object) => <SceneRow key={object.id} active={selectedObjectId === object.id} icon={object.kind === "actor" || object.primitive === "character" ? <UserRound /> : object.kind === "mannequin" ? <PersonStanding /> : object.kind === "model" ? <BoxSelect /> : object.kind === "billboard" ? <ImageIcon /> : <Cuboid />} label={object.name} onClick={() => setSelectedObjectId(object.id)} onDelete={() => removeObject(object.id)} />)}
                     </div>
                     <PanelTitle title="摄影机" action={<AddMenuButton label="添加摄影机" items={addCameraMenuItems} />} />
                     <div className="px-2 pb-2">{draft.cameras.map((camera) => <SceneRow key={camera.id} active={activeShot.cameraId === camera.id && !selectedObjectId && !selectedLightId} icon={<Camera />} label={camera.name} onClick={() => { setSelectedObjectId(null); setSelectedLightId(null); updateShot(activeShot.id, { cameraId: camera.id }); }} onDelete={() => removeCamera(camera.id)} />)}</div>

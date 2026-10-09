@@ -64,6 +64,11 @@ export function createDirectorModel(input: Pick<DirectorObject, "name" | "storag
     return { ...createDirectorObject("box", input.name, [0, 0, 0]), ...input, kind: "model", primitive: undefined };
 }
 
+/** Toonflow 关节人偶：无蒙皮/GLB，AI 可按 16 关节名摆姿态（见 director-document.ts 文档层）。 */
+export function createDirectorMannequin(name = "人偶", position: DirectorVec3 = [0, 0, 0], color = "#c7a77b"): DirectorObject {
+    return { ...createDirectorObject("box", name, position, color), kind: "mannequin", primitive: undefined, jointPoses: {}, hiddenParts: [] };
+}
+
 export function createDirectorBillboard(name: string, url: string, storageKey?: string, sourceNodeId?: string): DirectorObject {
     return { ...createDirectorObject("plane", name, [0, 1.1, 0], "#ffffff"), kind: "billboard", url, storageKey, sourceNodeId, transform: { position: [0, 1.1, 0], rotation: [0, 0, 0], scale: [1.6, 0.9, 1] } };
 }

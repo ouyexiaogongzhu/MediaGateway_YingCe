@@ -1,6 +1,11 @@
 export type DirectorVec3 = [number, number, number];
 export type DirectorQuat = [number, number, number, number];
 
+/** Toonflow 移植：程序化 16 关节人偶的关节名（director-mannequin.ts）。 */
+export type MannequinJoint = "hips" | "spine" | "neck" | "head"
+    | "leftShoulder" | "leftElbow" | "leftWrist" | "rightShoulder" | "rightElbow" | "rightWrist"
+    | "leftHip" | "leftKnee" | "leftAnkle" | "rightHip" | "rightKnee" | "rightAnkle";
+
 export type DirectorTransform = {
     position: DirectorVec3;
     rotation: DirectorVec3;
@@ -8,7 +13,7 @@ export type DirectorTransform = {
 };
 
 export type DirectorPrimitiveKind = "box" | "sphere" | "cylinder" | "plane" | "character";
-export type DirectorObjectKind = "primitive" | "model" | "actor" | "billboard";
+export type DirectorObjectKind = "primitive" | "model" | "actor" | "billboard" | "mannequin";
 export type DirectorPose = "neutral" | "stand" | "t_pose" | "walk" | "run" | "sit" | "squat" | "kneel_single" | "kneel_double" | "hands_hips" | "lean" | "bow" | "think" | "fight" | "kick" | "throw" | "push" | "wave" | "reach" | "arms_crossed" | "phone";
 export type DirectorCameraMove = "static" | "push_in" | "pull_out" | "pan_left" | "pan_right" | "tilt_up" | "tilt_down" | "orbit_left" | "orbit_right" | "handheld";
 export type DirectorShotSize = "extreme_wide" | "wide" | "full" | "medium" | "close_up" | "extreme_close_up";
@@ -76,6 +81,10 @@ export type DirectorObject = {
     castShadow: boolean;
     receiveShadow: boolean;
     pose?: DirectorPose;
+    /** 仅 mannequin：关节相对父关节的局部 XYZ 欧拉旋转（弧度），省略为自然站姿。 */
+    jointPoses?: Partial<Record<MannequinJoint, DirectorVec3>>;
+    /** 仅 mannequin：不显示指定关节及其下游部位。 */
+    hiddenParts?: MannequinJoint[];
     rig?: DirectorRig;
     motionClips?: DirectorMotionClip[];
     activeMotionClipId?: string;

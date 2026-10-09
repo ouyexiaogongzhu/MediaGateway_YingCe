@@ -7,6 +7,7 @@ import { GLTFLoader, SkeletonUtils } from "three-stdlib";
 
 import { resolveDirectorBoneRotation } from "@/lib/canvas/director/director-animation-semantics";
 import { applyClaySceneMaterials } from "@/lib/canvas/director/director-clay-materials";
+import { createMannequin, mannequinJoints, type MannequinJoint } from "@/lib/canvas/director/director-mannequin";
 import { createDirectorTransaction, installDirectorTerminalListeners } from "@/lib/canvas/director/director-gesture-transaction";
 import { emptyDirectorPlacementIntent, finiteDirectorGroundPoint, type DirectorGroundPoint, type DirectorPlacementIntent } from "@/lib/canvas/director/director-placement";
 import { directorDiagnosticObjectKind } from "@/lib/canvas/director/director-diagnostics";
@@ -308,7 +309,7 @@ function DirectorSceneContent({ scene, selectedObjectId, selectedBone, transform
     const camFraming = resolveDirectorViewFraming({ scene, mode: viewMode, playhead });
     const orthoFraming = resolveDirectorOrthographicFraming({ scene, mode: viewMode });
     const effectiveViewport = resolveDirectorEffectiveViewport({ mode: viewMode, framing: camFraming });
-    const actorMotionPaths = useMemo(() => showMotionPaths ? scene.objects.filter((object) => object.visible && (object.kind === "actor" || object.primitive === "character") && directorTransformPathLength(object.keyframes) > 0.001) : [], [scene.objects, showMotionPaths]);
+    const actorMotionPaths = useMemo(() => showMotionPaths ? scene.objects.filter((object) => object.visible && (object.kind === "actor" || object.kind === "mannequin" || object.primitive === "character") && directorTransformPathLength(object.keyframes) > 0.001) : [], [scene.objects, showMotionPaths]);
     const cameraMotionPaths = useMemo(() => showMotionPaths ? scene.cameras.filter((item) => directorTransformPathLength(item.keyframes) > 0.001) : [], [scene.cameras, showMotionPaths]);
     const suspendDisplayMaterialOverride = useCallback(() => {
         const suspended = Boolean(displayClayRestoreRef.current);
@@ -647,6 +648,7 @@ function applyObject3DTransform(target: Object3D, transform: DirectorTransform) 
 }
 
 function DirectorObjectVisual({ object, selected, selectedBone, playhead, onSelectBone, onBoneTransform, onActorRigReady, onLoadStateChange }: { object: DirectorObject; selected: boolean; selectedBone: string | null; playhead: number; onSelectBone: (bone: string | null) => void; onBoneTransform: (bone: string, rotation: DirectorQuat) => void; onActorRigReady: (rig: DirectorRig, animations: AnimationClip[]) => void; onLoadStateChange: (id: string, signal: DirectorLoadSignal, retry: () => void) => void }) {
+    if (object.kind === "mannequin") return <DirectorMannequinVisual object={object} selected={selected} />;
     if ((object.kind === "model" || object.kind === "actor" || object.primitive === "character") && (object.url || object.primitive === "character")) return <DirectorModel object={object} selected={selected} selectedBone={selectedBone} playhead={playhead} onSelectBone={onSelectBone} onBoneTransform={onBoneTransform} onActorRigReady={onActorRigReady} onLoadStateChange={onLoadStateChange} />;
     if (object.kind === "billboard" && object.url) return <DirectorBillboard object={object} selected={selected} />;
     const material = <meshStandardMaterial color={selected ? "#2f8cff" : object.color} roughness={0.68} metalness={0.05} />;
@@ -1061,6 +1063,30 @@ function applyDirectorBoneTracks(model: Object3D, object: DirectorObject, playhe
         const delta = poseDeltas[humanoidBone];
         if (delta) target.quaternion.multiply(new Quaternion(...delta));
     });
+}
+
+function DirectorMannequinVisual({ object, selected }: { object: DirectorObject; selected: boolean }) {
+    // 几何体只在 id 或 hiddenParts 变化时重建；颜色/关节姿态走声明式同步，避免每帧重建 BufferGeometry。
+    const hiddenKey = (object.hiddenParts ?? []).join(",");
+    const group = useMemo(() => createMannequin(object.id, "#c7a77b", hiddenKey ? (hiddenKey.split(",") as unknown as MannequinJoint[]) : []), [object.id, hiddenKey]);
+    useEffect(() => () => {
+        group.traverse((part) => {
+            if (part instanceof Mesh) {
+                part.geometry.dispose();
+                (part.material as Material).dispose();
+            }
+        });
+    }, [group]);
+    useEffect(() => {
+        group.traverse((part) => {
+            if (part instanceof Mesh) (part.material as MeshStandardMaterial).color.set(selected ? "#2f8cff" : object.color);
+        });
+        for (const joint of mannequinJoints) {
+            const euler = object.jointPoses?.[joint];
+            group.getObjectByName(joint)?.rotation.set(euler?.[0] ?? 0, euler?.[1] ?? 0, euler?.[2] ?? 0);
+        }
+    }, [group, selected, object.color, object.jointPoses]);
+    return <primitive object={group} />;
 }
 
 function DirectorBillboard({ object, selected }: { object: DirectorObject; selected: boolean }) {
