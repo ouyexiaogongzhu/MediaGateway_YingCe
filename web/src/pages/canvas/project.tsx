@@ -3,6 +3,7 @@ import { isCanvasNodeGenerating } from "@/lib/canvas/canvas-node-task-state";
 import { createCanvasStateWriter } from "@/lib/canvas/canvas-editor-state";
 import { canCancelGenerationTask } from "@/lib/generation-task-display";
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { Dispatch, MouseEvent as ReactMouseEvent, SetStateAction } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams, useSearchParams } from "react-router";
@@ -3281,9 +3282,14 @@ function InfiniteCanvasPage() {
                         {directorNodeId && activeDirectorScene ? (
                             <Suspense
                                 fallback={
-                                    <div className="fixed inset-0 z-[var(--z-toast)] grid place-items-center px-5" style={{ background: theme.canvas.background, color: theme.node.text }}>
-                                        <WorkspaceState icon="loading" title="正在加载 3D 导演台" description="准备场景、镜头与空间控制。" />
-                                    </div>
+                                    // 与 CanvasDirectorWorkbench 同理：editor-shell 是 z-index:0 层叠上下文，
+                                    // fixed + z-toast 赢不了父层 sidebar(z-index:2)，需 portal 到 body。
+                                    createPortal(
+                                        <div className="fixed inset-0 z-[var(--z-toast)] grid place-items-center px-5" style={{ background: theme.canvas.background, color: theme.node.text }}>
+                                            <WorkspaceState icon="loading" title="正在加载 3D 导演台" description="准备场景、镜头与空间控制。" />
+                                        </div>,
+                                        document.body,
+                                    )
                                 }
                             >
                                 <CanvasDirectorWorkbench
