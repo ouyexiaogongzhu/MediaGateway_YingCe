@@ -14,7 +14,8 @@ import { DirectorViewport, type DirectorViewportHandle } from "@/components/canv
 import { DirectorViewportDock } from "@/components/canvas/director/director-viewport-dock";
 import { DirectorSequencer } from "@/components/canvas/director/director-sequencer";
 import { canvasThemes } from "@/lib/canvas-theme";
-import { compileDirectorPrompt } from "@/lib/canvas/director/director-prompt-compiler";
+import { buildDirectorKeyframeI2vaPayload, compileDirectorKeyframeI2vaPrompt } from "@/lib/canvas/director/director-keyframe-i2va";
+import { readFileAsDataUrl } from "@/lib/image-utils";
 import { advanceDirectorPlayhead, resolveDirectorCameraAlignment, resolveDirectorCameraMoveKeyframes, resolveDirectorKeyframeRecord, resolveDirectorObjectTransformEdit, snapDirectorTime } from "@/lib/canvas/director/director-animation-semantics";
 import { createDirectorTransaction, installDirectorTerminalListeners, type DirectorTransaction } from "@/lib/canvas/director/director-gesture-transaction";
 import { recordDirectorDiagnostic } from "@/lib/canvas/director/director-diagnostics-recorder";
@@ -664,11 +665,11 @@ export function CanvasDirectorWorkbench({ open, scene, imageNodes, onboardingSco
         try {
             const beauty = await viewportRef.current.capture("beauty");
             if (!isDirectorOutputSnapshotCurrent(draftRef.current, expected)) throw new Error("输出期间场景或镜头已变化，请重试");
-            const prompt = compileDirectorPrompt(current, activeShot);
+            const prompt = compileDirectorKeyframeI2vaPrompt({ description: activeShot.prompt, cameraMove: activeShot.cameraMove, shotSize: activeShot.shotSize });
             // 先镜像最新 scene，再做 canvas 输出；失败时 draft 保留可继续重试。
             const next = touchDirectorScene(current);
             writeAndPublish(next);
-            await onApply({ scene: next, shot: activeShot, prompt, beauty });
+            await onApply({ scene: next, shot: activeShot, prompt, beauty, h3: buildDirectorKeyframeI2vaPayload({ keyframePngDataUrl: await readFileAsDataUrl(beauty), shot: activeShot }) });
             message.success("导演台构图已回写画布");
         } catch (error) {
             message.error(error instanceof Error ? error.message : "导演台输出失败");
@@ -695,7 +696,7 @@ export function CanvasDirectorWorkbench({ open, scene, imageNodes, onboardingSco
             writeAndPublish(next);
             const beauty = await viewportRef.current.capture("beauty");
             if (!isDirectorOutputSnapshotCurrent(draftRef.current, { scene: next, shotId: expected.shotId })) throw new Error("输出期间场景或镜头已变化，请重试");
-            await onApply({ scene: next, shot: activeShot, prompt: compileDirectorPrompt(next, activeShot), beauty, clayVideo, clayVideoMimeType: clayVideo.type });
+            await onApply({ scene: next, shot: activeShot, prompt: compileDirectorKeyframeI2vaPrompt({ description: activeShot.prompt, cameraMove: activeShot.cameraMove, shotSize: activeShot.shotSize }), beauty, clayVideo, clayVideoMimeType: clayVideo.type, h3: buildDirectorKeyframeI2vaPayload({ keyframePngDataUrl: await readFileAsDataUrl(beauty), shot: activeShot }) });
             message.success("白膜视频已回写画布");
         } catch (error) {
             message.error(error instanceof Error ? error.message : "白膜视频导出失败");

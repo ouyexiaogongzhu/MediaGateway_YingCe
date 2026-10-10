@@ -1,3 +1,5 @@
+import type { DirectorKeyframeI2vaPayload } from "@/lib/canvas/director/director-keyframe-i2va";
+
 export type DirectorVec3 = [number, number, number];
 export type DirectorQuat = [number, number, number, number];
 
@@ -163,4 +165,6 @@ export type DirectorSceneOutput = {
     normal?: Blob;
     clayVideo?: Blob;
     clayVideoMimeType?: string;
+    /** P4：关键帧 → h3 I2VA 载荷（首帧=构图 PNG dataURL，prompt=Context-IR）。 */
+    h3?: DirectorKeyframeI2vaPayload;
 };

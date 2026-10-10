@@ -190,6 +190,7 @@ export function useCanvasDirector({
             directorSceneId: output.scene.id,
             directorShotId: output.shot.id,
             directorPreviewNodeId: previewId,
+            directorH3Payload: output.h3,
             directorDepthNodeId: undefined,
             directorNormalNodeId: undefined,
             directorClayVideoNodeId: clayVideoId,

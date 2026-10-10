@@ -1,4 +1,5 @@
 import type { CanvasColorGrade } from "@/lib/canvas/canvas-color-grade";
+import type { DirectorKeyframeI2vaPayload } from "@/lib/canvas/director/director-keyframe-i2va";
 import type { MediaConversionNodeState } from "@/lib/media-conversion/contracts";
 import type { AssetCategory } from "@/lib/asset-category";
 import type { PortraitTextureSettings } from "@/lib/canvas/canvas-portrait-texture";
@@ -440,6 +441,7 @@ export type CanvasNodeMetadata = {
     directorSceneId?: string;
     directorShotId?: string;
     directorPreviewNodeId?: string;
+    directorH3Payload?: DirectorKeyframeI2vaPayload;
     directorDepthNodeId?: string;
     directorNormalNodeId?: string;
     directorClayVideoNodeId?: string;

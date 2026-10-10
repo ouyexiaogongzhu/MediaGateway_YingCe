@@ -201,6 +201,11 @@ export async function executeAudioGeneration({
 export function storyboardVideoInput(sourceNode: CanvasNodeData | undefined, canvasNodes: CanvasNodeData[]) {
     const metadata = sourceNode?.metadata?.workflowKind === "shot" ? sourceNode.metadata : undefined;
     if (!metadata) return undefined;
+    // P4：导演台回写时携带现成 h3 I2VA 载荷（首帧=关键帧；prompt 已是 Context-IR 且在
+    // composerContent；mute 已按 <d> 判定），优先于分镜首帧节点协议。
+    if (metadata.directorH3Payload) {
+        return { first_frame_image: metadata.directorH3Payload.first_frame_image, mute_audio: metadata.directorH3Payload.mute_audio };
+    }
     const dialogue = (metadata.storyboardDialogue || "").trim();
     const startFrameNodeId = metadata.videoStartFrameNodeId;
     const firstFrameImage = startFrameNodeId
