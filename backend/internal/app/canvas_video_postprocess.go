@@ -12,7 +12,8 @@ import (
 	"infinite-canvas/backend/internal/model"
 )
 
-// canvas_video 音频分工后处理：任务成功落库后异步补做 台词配音 → BGM → 混音。
+// canvas_video 音频分工后处理：任务成功落库后异步补做 BGM → 混音。
+// 配音链（gateway voice job）已随 MediaGateway TTS 引擎删除而移除。
 // 任一步失败不影响视频任务本身（错误写 result.postProcessError，产物仍用原视频）；
 // 成功后 mix 产物成为最终产物，原视频保留在 result.audioPostProcess.sourceVideo。
 
@@ -33,9 +34,8 @@ func (s *Service) maybeScheduleCanvasVideoAudioPostProcess(task model.Task, ctx 
 	if json.Unmarshal([]byte(decrypted), &input) != nil {
 		return
 	}
-	dialogue := strings.TrimSpace(input.Dialogue)
 	bgm := strings.TrimSpace(input.BGMPrompt)
-	if dialogue == "" && bgm == "" {
+	if bgm == "" {
 		return
 	}
 	// 防重复触发：结果里已有后处理产物或错误标记就不再跑（worker 与人工恢复两个入口互斥，
@@ -54,11 +54,11 @@ func (s *Service) maybeScheduleCanvasVideoAudioPostProcess(task model.Task, ctx 
 	postCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), audioPostProcessTotalTimeout)
 	go func() {
 		defer cancel()
-		s.runCanvasVideoAudioPostProcess(postCtx, task, input, dialogue, bgm)
+		s.runCanvasVideoAudioPostProcess(postCtx, task, input, bgm)
 	}()
 }
 
-func (s *Service) runCanvasVideoAudioPostProcess(ctx context.Context, task model.Task, input canvasGenerationInput, dialogue string, bgm string) {
+func (s *Service) runCanvasVideoAudioPostProcess(ctx context.Context, task model.Task, input canvasGenerationInput, bgm string) {
 	applyErr := func(err error) {
 		if writeErr := s.updateTaskResult(task.ID, task.ResultJSON, func(result map[string]any) {
 			result["postProcessError"] = truncateRunes(err.Error(), 500)
@@ -106,22 +106,8 @@ func (s *Service) runCanvasVideoAudioPostProcess(ctx context.Context, task model
 	}
 
 	gateway := s.mediaGateway()
-	tracks := make([]map[string]any, 0, 2)
-	voiceJobID, musicJobID := "", ""
-	if dialogue != "" {
-		if voiceKey := s.canvasVideoVoiceKey(task.UserID, input); voiceKey == "" {
-			_ = s.log(task.UserID, task.ID, "info", "任务没有角色声音关联，跳过台词配音", "")
-		} else if job, err := gateway.createJob(ctx, "voice", map[string]any{"text": dialogue, "voice": voiceKey}); err != nil {
-			applyErr(fmt.Errorf("提交配音任务失败：%w", err))
-			return
-		} else if job, err = gateway.wait(ctx, job.ID); err != nil {
-			applyErr(fmt.Errorf("配音生成失败：%w", err))
-			return
-		} else {
-			voiceJobID = job.ID
-			tracks = append(tracks, map[string]any{"path": job.OutputPath, "start": 0})
-		}
-	}
+	tracks := make([]map[string]any, 0, 1)
+	musicJobID := ""
 	if bgm != "" {
 		musicParams := map[string]any{"prompt": bgm}
 		if durationSeconds > 0 {
@@ -138,10 +124,6 @@ func (s *Service) runCanvasVideoAudioPostProcess(ctx context.Context, task model
 		}
 		musicJobID = job.ID
 		tracks = append(tracks, map[string]any{"path": job.OutputPath, "loop": true})
-	}
-	if len(tracks) == 0 {
-		// 只有对白且没有声音关联：无事可做，保持原样。
-		return
 	}
 	job, err := gateway.createJob(ctx, "mix", map[string]any{"video": videoPath, "audio_tracks": tracks, "output_name": "final.mp4"})
 	if err != nil {
@@ -175,7 +157,7 @@ func (s *Service) runCanvasVideoAudioPostProcess(ctx context.Context, task model
 	if err := s.updateTaskResult(task.ID, task.ResultJSON, func(result map[string]any) {
 		result["video"] = finalVideo
 		result["audioPostProcess"] = map[string]any{
-			"voiceJobId": voiceJobID, "musicJobId": musicJobID, "mixJobId": job.ID,
+			"musicJobId": musicJobID, "mixJobId": job.ID,
 			"mixOutputPath": mixOutputPath, "sourceVideo": videoItem,
 		}
 	}); err != nil {
@@ -183,28 +165,6 @@ func (s *Service) runCanvasVideoAudioPostProcess(ctx context.Context, task model
 		return
 	}
 	_ = s.log(task.UserID, task.ID, "info", "音频后处理完成，最终产物为混音成片", job.ID)
-}
-
-// canvasVideoVoiceKey 从任务 metadata 的角色/资产版本关联反查音色（shotVoiceKey 同一条链）；
-// 无关联返回空串，调用方跳过配音。
-func (s *Service) canvasVideoVoiceKey(userID string, input canvasGenerationInput) string {
-	versionID := firstNonEmpty(
-		metadataString(input.Metadata, "assetVersionId"),
-		metadataString(input.Metadata, "characterVersionId"),
-		metadataString(input.Metadata, "characterAssetVersionId"),
-	)
-	if strings.TrimSpace(versionID) == "" {
-		return ""
-	}
-	binding, err := s.repo.CharacterVoiceBinding(versionID)
-	if err != nil || strings.TrimSpace(binding.VoiceProfileID) == "" {
-		return ""
-	}
-	profile, err := s.repo.VoiceProfileForUser(userID, binding.VoiceProfileID)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(profile.VoiceKey)
 }
 
 // gatewayVideoInputPath 把视频资源解析成 gateway 可读的本地路径；

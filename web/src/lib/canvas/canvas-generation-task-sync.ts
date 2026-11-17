@@ -2,7 +2,6 @@ import { NODE_DEFAULT_SIZE } from "@/constant/canvas";
 import { commitCanvasGenerationResult } from "@/lib/canvas/canvas-generation-result";
 import { fitNodeSize, nodeSizeFromRatio, VIDEO_NODE_MAX_SIZE } from "@/lib/canvas/canvas-node-size";
 import { compositeEmotionImage } from "@/lib/canvas/canvas-emotion";
-import { storeGeneratedAudio } from "@/services/api/audio";
 import { storeGeneratedVideo } from "@/services/api/video";
 import { parseBackendGenerationResult } from "@/services/api/generation-task";
 import type { GenerationTask, GenerationTaskOutput } from "@/services/api/task-center";
@@ -185,11 +184,8 @@ export async function buildGenerationTaskNodeResult(node: CanvasNodeData, task: 
     }
 
     if (mode === "audio") {
-        if (!result.audio?.dataUrl) throw new Error("后端任务没有返回音频");
-        const audio = result.audio.storageKey
-            ? { url: await resolveMediaUrl(result.audio.storageKey, result.audio.dataUrl), storageKey: result.audio.storageKey, durationMs: result.audio.durationMs, bytes: result.audio.bytes || 0, mimeType: result.audio.mimeType || "audio/mpeg" }
-            : await storeGeneratedAudio(await (await fetch(result.audio.dataUrl)).blob(), result.audio.format || "mp3");
-        return { ...node, type: CanvasNodeType.Audio, metadata: applyGeneratedMediaResultMetadata(node, audioMetadata(audio), { prompt, ...completedTaskMetadata(task) }, task.model) };
+        // 音频生成链已随 TTS 引擎删除；历史 audio 任务不再水合成节点。
+        throw new Error("音频生成已下线");
     }
 
     if (!result.text) throw new Error("后端任务没有返回文本");

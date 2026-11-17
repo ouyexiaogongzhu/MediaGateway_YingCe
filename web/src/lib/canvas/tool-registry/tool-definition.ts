@@ -97,7 +97,6 @@ export type ToolbarHandlers = {
     onNodeExtractVideoFrames: (node: CanvasNodeData) => void;
     onNodeExtractAudioFromVideo: (node: CanvasNodeData) => void;
     onNodeTrimVideoSegments: (node: CanvasNodeData) => void;
-    onNodeUpscale1080p: (node: CanvasNodeData) => void;
     onNodeScriptToStoryboard: (node: CanvasNodeData) => void;
     onNodeGenerateStoryboardRows: (node: CanvasNodeData) => void;
     onNodeSubtitles: (node: CanvasNodeData) => void;
@@ -128,7 +127,6 @@ export type ToolContext = {
     extractingAudio: boolean;
     trimmingVideo: boolean;
     /** 视频 1080P 超分进行中（节点悬停工具栏用） */
-    upscaling1080p: boolean;
     /** 分镜脚本转分镜行进行中（节点悬停工具栏用） */
     scriptingToStoryboard: boolean;
     /** 生成分镜行（文本模型拆解剧本）进行中（节点悬停工具栏用） */

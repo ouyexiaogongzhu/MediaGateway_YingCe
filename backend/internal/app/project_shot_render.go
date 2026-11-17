@@ -49,11 +49,10 @@ func shotRenderSize(aspectRatio string, draft bool) (int, int) {
 }
 
 type RenderAllShotsResult struct {
-	ProjectID           string               `json:"projectId"`
-	Shots               []RenderedShotResult `json:"shots"`
-	VoiceSkippedShotIDs []string             `json:"voiceSkippedShotIds,omitempty"`
-	ConcatJobID         string               `json:"concatJobId,omitempty"`
-	FinalResourceID     string               `json:"finalResourceId,omitempty"`
+	ProjectID       string               `json:"projectId"`
+	Shots           []RenderedShotResult `json:"shots"`
+	ConcatJobID     string               `json:"concatJobId,omitempty"`
+	FinalResourceID string               `json:"finalResourceId,omitempty"`
 }
 
 type RenderedShotResult struct {
@@ -64,10 +63,6 @@ type RenderedShotResult struct {
 	LastFramePath       string `json:"lastFramePath,omitempty"`
 	VideoArtifactID     string `json:"videoArtifactId"`
 	LastFrameArtifactID string `json:"lastFrameArtifactId,omitempty"`
-	// VoiceSkipped=true 表示这个镜头有台词但没绑音色，台词被丢弃。
-	// render-all 一直有回报 voiceSkippedShotIds，单镜头此前把 renderProjectShot
-	// 的第三个返回值用 _ 丢掉，于是用户单独渲染一个带台词的镜头时没有任何提示。
-	VoiceSkipped bool `json:"voiceSkipped,omitempty"`
 }
 
 const renderAllShotTempPrefix = "canvas-shot-ref-"
@@ -144,16 +139,13 @@ func (s *Service) RenderAllProjectShots(ctx context.Context, userID string, proj
 	}
 	for index := start; index < len(shots); index++ {
 		shot := shots[index]
-		rendered, lastFramePath, voiceSkipped, renderErr := s.renderProjectShot(ctx, gateway, userID, projectID, &shot, previousLastFrame, referencesByShot[shot.ID], req)
+		rendered, lastFramePath, renderErr := s.renderProjectShot(ctx, gateway, userID, projectID, &shot, previousLastFrame, referencesByShot[shot.ID], req)
 		if renderErr != nil {
 			title := strings.TrimSpace(shot.Title)
 			if title == "" {
 				title = shot.ID
 			}
 			return nil, fmt.Errorf("镜头「%s」渲染失败：%w", title, renderErr)
-		}
-		if voiceSkipped {
-			result.VoiceSkippedShotIDs = append(result.VoiceSkippedShotIDs, shot.ID)
 		}
 		if index > start && previousLastFrame == "" {
 			// 上一镜没拿到尾帧：静默重建首帧会让多镜连续性无声断裂，宁可显式失败
@@ -190,22 +182,22 @@ func (s *Service) RenderAllProjectShots(ctx context.Context, userID string, proj
 }
 
 // renderProjectShot 渲染单个镜头并回写产物；返回尾帧路径供下一镜头接力。
-func (s *Service) renderProjectShot(ctx context.Context, gateway *gatewayClient, userID string, projectID string, shot *model.Shot, previousLastFrame string, references []model.ShotAssetReference, req RenderAllShotsRequest) (RenderedShotResult, string, bool, error) {
+func (s *Service) renderProjectShot(ctx context.Context, gateway *gatewayClient, userID string, projectID string, shot *model.Shot, previousLastFrame string, references []model.ShotAssetReference, req RenderAllShotsRequest) (RenderedShotResult, string, error) {
 	// 渲染可达数分钟：HTTP 客户端断开/代理超时不应中断产物链，
 	// 否则 gateway 侧 job 成孤儿继续烧算力，而本地 artifact/状态全部缺失。
 	ctx = context.WithoutCancel(ctx)
 	result := RenderedShotResult{ShotID: shot.ID, Position: shot.Position}
 	if strings.TrimSpace(shot.CurrentRevisionID) == "" {
-		return result, "", false, BadAuthRequest("镜头缺少分镜版本")
+		return result, "", BadAuthRequest("镜头缺少分镜版本")
 	}
 	revision, err := s.repo.ShotRevisionForShot(shot.ID, shot.CurrentRevisionID)
 	if err != nil {
-		return result, "", false, err
+		return result, "", err
 	}
 	continueChain := strings.TrimSpace(previousLastFrame) != ""
 	params := map[string]any{}
 	if firstNonEmpty(strings.TrimSpace(revision.VideoPrompt), revision.PlotDescription) == "" && !req.Draft {
-		return result, "", false, BadAuthRequest("镜头缺少画面提示词")
+		return result, "", BadAuthRequest("镜头缺少画面提示词")
 	}
 	width, height := req.Width, req.Height
 	if width <= 0 || height <= 0 {
@@ -214,7 +206,7 @@ func (s *Service) renderProjectShot(ctx context.Context, gateway *gatewayClient,
 	if !continueChain && !req.Draft {
 		imagePrompt := strings.TrimSpace(revision.ImagePrompt)
 		if imagePrompt == "" {
-			return result, "", false, BadAuthRequest("镜头缺少画面提示词，无法生成首帧")
+			return result, "", BadAuthRequest("镜头缺少画面提示词，无法生成首帧")
 		}
 		// 首帧必须与视频同幅：不传就落 qwen_image 缺省 1024x1024（实测死锁尺寸），
 		// 且与下面的视频画幅不一致，h3 缩画布时还会再裁一次。
@@ -240,7 +232,7 @@ func (s *Service) renderProjectShot(ctx context.Context, gateway *gatewayClient,
 	}
 	if req.Draft {
 		if firstNonEmpty(strings.TrimSpace(revision.VideoPrompt), revision.PlotDescription) == "" {
-			return result, "", false, BadAuthRequest("草稿镜头缺少画面提示词")
+			return result, "", BadAuthRequest("草稿镜头缺少画面提示词")
 		}
 		video["profile"] = "draft" // 覆盖上面误设的 quality（6步/internal，512x288 下无 internal）
 		if !continueChain {
@@ -251,21 +243,13 @@ func (s *Service) renderProjectShot(ctx context.Context, gateway *gatewayClient,
 	paths, cleanup, resolveErr := s.resolveShotReferencePaths(userID, references)
 	defer cleanup()
 	if resolveErr != nil {
-		return result, "", false, resolveErr
+		return result, "", resolveErr
 	}
 	if len(paths) > 0 {
 		video["refs"] = paths
 	}
 	params["video"] = video
-	voiceSkipped := false
-	dialogue := strings.TrimSpace(revision.Dialogue)
-	if !req.Draft && dialogue != "" {
-		if voiceKey := s.shotVoiceKey(userID, references); voiceKey != "" {
-			params["voice"] = map[string]any{"text": dialogue, "voice": voiceKey}
-		} else {
-			voiceSkipped = true
-		}
-	}
+	// 配音参数（params["voice"]）已随 MediaGateway TTS 引擎删除而移除，镜头视频为无声视频。
 	if tags := req.SfxTags[shot.ID]; len(tags) > 0 {
 		params["sfx"] = tags
 	}
@@ -279,22 +263,22 @@ func (s *Service) renderProjectShot(ctx context.Context, gateway *gatewayClient,
 
 	job, err := gateway.createJob(ctx, "shot", params)
 	if err != nil {
-		return result, "", voiceSkipped, err
+		return result, "", err
 	}
 	result.JobID = job.ID
 	job, err = gateway.wait(ctx, job.ID)
 	if err != nil {
-		return result, "", voiceSkipped, err
+		return result, "", err
 	}
 	result.VideoPath = firstNonEmpty(job.OutputPath, gateway.metaString(job, "output_path"))
 	if result.VideoPath == "" {
-		return result, "", voiceSkipped, fmt.Errorf("gateway job %s 未返回视频路径", job.ID)
+		return result, "", fmt.Errorf("gateway job %s 未返回视频路径", job.ID)
 	}
 	result.LastFramePath = gateway.metaString(job, "last_frame_path")
 	now := time.Now()
 	metadata, err := json.Marshal(map[string]string{"gatewayJobId": job.ID, "videoPath": result.VideoPath, "lastFramePath": result.LastFramePath})
 	if err != nil {
-		return result, "", voiceSkipped, err
+		return result, "", err
 	}
 	videoArtifact := &model.ShotArtifact{ID: newID(), ProjectID: projectID, UnitID: shot.UnitID, ShotID: shot.ID, RevisionID: shot.CurrentRevisionID, Type: "video", Status: "ready", Selected: !req.Draft, MetadataJSON: string(metadata), CreatedAt: now, UpdatedAt: now}
 	if req.Draft {
@@ -302,14 +286,14 @@ func (s *Service) renderProjectShot(ctx context.Context, gateway *gatewayClient,
 		videoArtifact.MetadataJSON = string(metadata)
 	}
 	if err := s.repo.CreateShotArtifact(videoArtifact); err != nil {
-		return result, "", voiceSkipped, err
+		return result, "", err
 	}
 	result.VideoArtifactID = videoArtifact.ID
 	if result.LastFramePath != "" {
 		frameMetadata, _ := json.Marshal(map[string]string{"gatewayJobId": job.ID, "path": result.LastFramePath})
 		frameArtifact := &model.ShotArtifact{ID: newID(), ProjectID: projectID, UnitID: shot.UnitID, ShotID: shot.ID, RevisionID: shot.CurrentRevisionID, Type: "shot_last_frame", Status: "ready", Selected: !req.Draft, MetadataJSON: string(frameMetadata), CreatedAt: now, UpdatedAt: now}
 		if err := s.repo.CreateShotArtifact(frameArtifact); err != nil {
-			return result, "", voiceSkipped, err
+			return result, "", err
 		}
 		result.LastFrameArtifactID = frameArtifact.ID
 	}
@@ -317,26 +301,10 @@ func (s *Service) renderProjectShot(ctx context.Context, gateway *gatewayClient,
 		shot.Status = "completed"
 		shot.UpdatedAt = now
 		if err := s.repo.SaveShot(shot, false); err != nil {
-			return result, "", voiceSkipped, err
+			return result, "", err
 		}
 	}
-	return result, result.LastFramePath, voiceSkipped, nil
-}
-
-// shotVoiceKey 从镜头引用的资产版本反查角色声音绑定；找不到返回空串（跳过配音）。
-func (s *Service) shotVoiceKey(userID string, references []model.ShotAssetReference) string {
-	for _, reference := range references {
-		binding, err := s.repo.CharacterVoiceBinding(reference.AssetVersionID)
-		if err != nil || strings.TrimSpace(binding.VoiceProfileID) == "" {
-			continue
-		}
-		profile, err := s.repo.VoiceProfileForUser(userID, binding.VoiceProfileID)
-		if err != nil || strings.TrimSpace(profile.VoiceKey) == "" {
-			continue
-		}
-		return profile.VoiceKey
-	}
-	return ""
+	return result, result.LastFramePath, nil
 }
 
 // autoShotCharacterReferences 分镜文本（标题+image/video 提示词+画面描述）命中角色资产
@@ -584,10 +552,9 @@ func (s *Service) RenderProjectShot(ctx context.Context, userID string, projectI
 			shotRefs = append(shotRefs, reference)
 		}
 	}
-	rendered, _, voiceSkipped, err := s.renderProjectShot(ctx, gateway, userID, projectID, shot, "", shotRefs, req)
+	rendered, _, err := s.renderProjectShot(ctx, gateway, userID, projectID, shot, "", shotRefs, req)
 	if err != nil {
 		return nil, err
 	}
-	rendered.VoiceSkipped = voiceSkipped
 	return &rendered, nil
 }

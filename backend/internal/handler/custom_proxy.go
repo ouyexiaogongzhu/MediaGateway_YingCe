@@ -128,7 +128,7 @@ func proxyCustomRelayRequestWithService(c *gin.Context, policy service.RuntimeRe
 		return
 	}
 	defer resp.Body.Close()
-	allowBinary := customVideoContentPath.MatchString(target.EscapedPath()) || strings.HasSuffix(target.Path, "/audio/speech")
+	allowBinary := customVideoContentPath.MatchString(target.EscapedPath())
 	writeCustomRelayResponse(c, svc, resp, apiKey, policy.CustomRelayResponseMB<<20, allowBinary)
 }
 

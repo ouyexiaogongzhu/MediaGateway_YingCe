@@ -61,8 +61,8 @@ func TestBinaryPayloadCreateResultAudio(t *testing.T) {
 		"apiVersion":"yingce.plugin/v1",
 		"id":"audio-bin","version":"1.0.0","name":"Audio Bin","author":"Test","documentation":"# Audio",
 		"contributes":{"providers":[{
-			"id":"openai-audio","label":"OpenAI Audio","capabilities":["audio"],"scopes":["canvas"],
-			"create":{"method":"POST","path":"/v1/audio/speech","body":{"model":{"$ref":"request.model"},"input":{"$ref":"request.prompt"}}},
+			"id":"audio-bin","label":"Audio Bin","capabilities":["audio"],"scopes":["canvas"],
+			"create":{"method":"POST","path":"/v1/audio/sync","body":{"model":{"$ref":"request.model"},"input":{"$ref":"request.prompt"}}},
 			"response":{"binaryPayload":true,"resultKind":"audio","status":"succeeded"}
 		}]}
 	}`)

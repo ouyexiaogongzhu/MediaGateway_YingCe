@@ -1,4 +1,3 @@
-import { requestAudioGeneration } from "@/services/api/audio";
 import { requestGeneration, requestImageQuestion } from "@/services/api/image";
 import { createVideoGenerationTask } from "@/services/api/video";
 import { defaultConfig, encodeChannelModel, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
@@ -58,8 +57,7 @@ export async function testChannelModelConnection(channel: ModelChannel, model: s
             await requestGeneration(config, "A simple gray circle on a white background.");
             return "图片生成正常";
         case "audio":
-            await requestAudioGeneration(config, "Model test.");
-            return "音频生成正常";
+            throw new Error("音频生成已下线");
         case "video": {
             const task = await createVideoGenerationTask(config, "A static gray circle on a white background.");
             return `视频任务已创建（${task.id}）`;

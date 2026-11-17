@@ -12,7 +12,7 @@ import (
 )
 
 // 脚本 → 分镜脚本转换工具：把脚本节点文本里的 LLM 分镜 JSON 落成同画布新分镜节点。
-// model 参数预留（文本已含分镜行，暂忽略）；限流与 /tools/upscale 同口径。
+// model 参数预留（文本已含分镜行，暂忽略）；限流与 /tasks 同口径。
 func toolsScriptToStoryboard(svc *service.Service) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		user, err := currentUser(c, svc)

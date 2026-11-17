@@ -1,5 +1,5 @@
 import { Popover } from "antd";
-import { ChevronDown, ChevronRight, CircleUserRound, History as HistoryIcon, Infinity as InfinityIcon, MonitorUp, PanelLeftClose, PanelLeftOpen, Plus } from "lucide-react";
+import { ChevronDown, ChevronRight, CircleUserRound, History as HistoryIcon, Infinity as InfinityIcon, PanelLeftClose, PanelLeftOpen, Plus } from "lucide-react";
 import { LayoutGroup, motion, useReducedMotion } from "motion/react";
 import { useEffect, useMemo, useRef, useState, type ComponentType, type CSSProperties } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
@@ -47,7 +47,6 @@ function buildNav(features: FeatureAvailability, isAdmin: boolean): { groups: Wo
                 { ...toolItem("create", "/"), id: "home", title: "创作" },
                 ...(features.shortDramaEnabled ? [{ ...toolItem("projects", "/projects"), title: "短剧 Agent" }] : []),
                 { ...toolItem("canvas", "/canvas"), title: "自由画布" },
-                { id: "tools-upscale", title: "视频超分", icon: MonitorUp, to: "/tools/upscale" },
             ],
         },
         {

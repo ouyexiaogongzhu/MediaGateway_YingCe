@@ -12,7 +12,7 @@ import (
 )
 
 // 生成分鏰行工具：契约指令 + 劇本 → 文本模型 → 分镜行節點，后端同步执行
-// （长剧本可达数分钟），限流与 /tools/upscale 同口径。
+// （长剧本可达数分钟），限流与 /tasks 同口径。
 func toolsGenerateStoryboardRows(svc *service.Service) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		user, err := currentUser(c, svc)

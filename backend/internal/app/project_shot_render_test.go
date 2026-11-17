@@ -244,10 +244,7 @@ func TestRenderAllProjectShotsChainsLastFrameAndRegistersFinal(t *testing.T) {
 		t.Fatalf("unexpected refs on first shot: %v", firstVideo["refs"])
 	}
 	if _, hasVoice := shotJobs[0]["voice"]; hasVoice {
-		t.Fatal("shot with dialogue but no voice binding must skip voice stage")
-	}
-	if len(result.VoiceSkippedShotIDs) != 1 || result.VoiceSkippedShotIDs[0] != "shot-1" {
-		t.Fatalf("voiceSkippedShotIds = %v, want [shot-1]", result.VoiceSkippedShotIDs)
+		t.Fatal("voice 阶段已随 TTS 链删除，shot job 不应再带 voice 参数")
 	}
 	// 配乐改成成片级：逐镜不再各带一段，否则与 concat 的 music_segments 叠音。
 	for index, params := range shotJobs {
@@ -480,21 +477,14 @@ func TestRenderAllProjectShotsSingleShotKeepsShotMusic(t *testing.T) {
 	}
 }
 
-func TestRenderProjectShotReportsVoiceSkipped(t *testing.T) {
-	// 單鏡頭渲染此前把 renderProjectShot 的第三個返回值用 _ 丟掉，於是帶台詞的
-	// 鏡頭被靜默丟棄台詞、API 也不回報任何東西（render-all 有 voiceSkippedShotIds）。
+func TestRenderProjectShotOmitsVoiceStage(t *testing.T) {
+	// voice 阶段已随 MediaGateway TTS 引擎删除：带台词的镜头也不再送 voice 参数。
 	service, gateway := newRenderAllTestService(t)
-	// Draft 會整段跳過 voice（那是 draft 的定義），所以要跑完整鏈路才碰得到這條路徑。
-	result, err := service.RenderProjectShot(context.Background(), "user-render", "project-render", "shot-1", RenderAllShotsRequest{})
-	if err != nil {
+	if _, err := service.RenderProjectShot(context.Background(), "user-render", "project-render", "shot-1", RenderAllShotsRequest{}); err != nil {
 		t.Fatal(err)
 	}
-	// shot-1 的 revision 帶 Dialogue，且沒有任何音色綁定 → 必須回報
-	if !result.VoiceSkipped {
-		t.Fatal("voiceSkipped must be true for a dialogue shot with no voice binding")
-	}
 	if _, hasVoice := gateway.submitted(t, "shot")[0]["voice"]; hasVoice {
-		t.Fatal("no voice stage may be sent when no voice binding exists")
+		t.Fatal("voice stage must not be sent anymore")
 	}
 }
 

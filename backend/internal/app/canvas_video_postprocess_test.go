@@ -142,14 +142,11 @@ func TestRunVideoTaskMaterializesStorageKeyReferences(t *testing.T) {
 	}
 }
 
-// 验证 canvas_video 音频后处理：voice→music→mix 链路成功后混音成片成为最终产物，原视频保留。
-func TestCanvasVideoAudioPostProcessMixesVoiceAndMusic(t *testing.T) {
+// 验证 canvas_video 音频后处理：music→mix 链路成功后混音成片成为最终产物，原视频保留。
+func TestCanvasVideoAudioPostProcessMixesMusic(t *testing.T) {
 	service, gateway, db := newAudioPostProcessTestService(t)
-	task := seedAudioPostProcessTask(t, db, `{"mode":"video","prompt":"镜头","config":{"videoSeconds":"4"},"metadata":{"assetVersionId":"ver-1"}}`, "台词", "紧张配乐")
+	task := seedAudioPostProcessTask(t, db, `{"mode":"video","prompt":"镜头","config":{"videoSeconds":"4"}}`, "紧张配乐")
 
-	gateway.mu.Lock()
-	gateway.voiceKey = "narrator-main"
-	gateway.mu.Unlock()
 	service.maybeScheduleCanvasVideoAudioPostProcess(task, context.Background())
 
 	waitForAudioPostProcess(t, service, task.ID, "audioPostProcess")
@@ -181,12 +178,11 @@ func TestCanvasVideoAudioPostProcessMixesVoiceAndMusic(t *testing.T) {
 	}
 
 	jobs := gateway.submitted(t)
-	if len(jobs) != 3 {
-		t.Fatalf("jobs = %d, want voice+music+mix", len(jobs))
+	if len(jobs) != 2 {
+		t.Fatalf("jobs = %d, want music+mix", len(jobs))
 	}
-	voice := jobs["voice"]
-	if voice["voice"] != "narrator-main" || voice["text"] != "台词" {
-		t.Fatalf("voice params = %v", voice)
+	if _, exists := jobs["voice"]; exists {
+		t.Fatalf("配音链已删除，不应再提交 voice job：%v", jobs)
 	}
 	music := jobs["music"]
 	if music["prompt"] != "紧张配乐" || music["duration_s"] != float64(4) {
@@ -200,27 +196,22 @@ func TestCanvasVideoAudioPostProcessMixesVoiceAndMusic(t *testing.T) {
 		t.Fatalf("mix video 应指向本地视频文件：%v", mix["video"])
 	}
 	tracks, _ := mix["audio_tracks"].([]any)
-	if len(tracks) != 2 {
+	if len(tracks) != 1 {
 		t.Fatalf("audio_tracks = %v", mix["audio_tracks"])
 	}
-	voiceTrack, _ := tracks[0].(map[string]any)
-	musicTrack, _ := tracks[1].(map[string]any)
-	if voiceTrack["path"] != gateway.outputs["voice"] || voiceTrack["start"] != float64(0) {
-		t.Fatalf("voice track = %v", voiceTrack)
-	}
+	musicTrack, _ := tracks[0].(map[string]any)
 	if musicTrack["path"] != gateway.outputs["music"] || musicTrack["loop"] != true {
 		t.Fatalf("music track = %v", musicTrack)
 	}
 }
 
-// 验证失败路径：voice job 失败时任务保持成功、产物不变，错误写 postProcessError。
+// 验证失败路径：music job 失败时任务保持成功、产物不变，错误写 postProcessError。
 func TestCanvasVideoAudioPostProcessFailureKeepsOriginalVideo(t *testing.T) {
 	service, gateway, db := newAudioPostProcessTestService(t)
 	gateway.mu.Lock()
-	gateway.voiceKey = "narrator-main"
-	gateway.failType = "voice"
+	gateway.failType = "music"
 	gateway.mu.Unlock()
-	task := seedAudioPostProcessTask(t, db, `{"mode":"video","prompt":"镜头","dialogue":"台词","metadata":{"assetVersionId":"ver-1"}}`, "台词", "")
+	task := seedAudioPostProcessTask(t, db, `{"mode":"video","prompt":"镜头"}`, "紧张配乐")
 
 	service.maybeScheduleCanvasVideoAudioPostProcess(task, context.Background())
 	waitForAudioPostProcess(t, service, task.ID, "postProcessError")
@@ -247,7 +238,7 @@ func TestCanvasVideoAudioPostProcessFailureKeepsOriginalVideo(t *testing.T) {
 // 验证无对白无 BGM 的任务零行为变化：不触发任何 gateway job。
 func TestCanvasVideoAudioPostProcessSkipsPlainTasks(t *testing.T) {
 	service, gateway, db := newAudioPostProcessTestService(t)
-	task := seedAudioPostProcessTask(t, db, `{"mode":"video","prompt":"镜头"}`, "", "")
+	task := seedAudioPostProcessTask(t, db, `{"mode":"video","prompt":"镜头"}`, "")
 
 	service.maybeScheduleCanvasVideoAudioPostProcess(task, context.Background())
 	time.Sleep(50 * time.Millisecond)
@@ -262,7 +253,6 @@ type audioPostProcessGateway struct {
 	mu       sync.Mutex
 	jobs     []map[string]any
 	outputs  map[string]string
-	voiceKey string
 	failType string
 	nextID   int
 }
@@ -387,16 +377,13 @@ func newAudioPostProcessTestService(t *testing.T) (*Service, *audioPostProcessGa
 	return service, gateway, db
 }
 
-func seedAudioPostProcessTask(t *testing.T, db *gorm.DB, inputJSON string, dialogue string, bgm string) model.Task {
+func seedAudioPostProcessTask(t *testing.T, db *gorm.DB, inputJSON string, bgm string) model.Task {
 	t.Helper()
 	result := map[string]any{"mode": "video", "video": map[string]any{"resourceId": "resource-avp", "url": "/api/resources/resource-avp/file", "storageKey": "resource:resource-avp"}}
 	resultJSON, _ := json.Marshal(result)
 	input := map[string]any{}
 	if err := json.Unmarshal([]byte(inputJSON), &input); err != nil {
 		t.Fatal(err)
-	}
-	if dialogue != "" {
-		input["dialogue"] = dialogue
 	}
 	if bgm != "" {
 		input["bgm_prompt"] = bgm

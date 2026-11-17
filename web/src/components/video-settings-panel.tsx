@@ -19,7 +19,7 @@ const sizeOptions = [
     { value: "auto", label: "auto", width: 0, height: 0 },
 ];
 
-// h3 工作流四档：288p 草稿生成 → 确认 → 576p 正片重渲 → FlashVSR 超分 1080p。
+// 视频工作流三档：288p 草稿生成 → 确认 → 576p 正片重渲（FlashVSR 超分档已随超分链删除）。
 // 原 9 档像素预设收敛为这四档；自定义像素画幅入口暂时关闭（32 倍数/像素上限校验保留，随时可恢复）。
 const VIDEO_WORKFLOW_SIZE_PRESETS = [
     { value: "288x512", label: "草稿 豎" },

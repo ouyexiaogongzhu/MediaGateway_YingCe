@@ -52,7 +52,6 @@ const ProjectsPage = lazy(loadProjectsPage);
 const ProjectDetailPage = lazy(loadProjectDetailPage);
 const SettingsPage = lazy(() => import("@/pages/settings"));
 const TestVoiceRecording = lazy(() => import("@/pages/test-voice-recording"));
-const ToolsUpscalePage = lazy(() => import("@/pages/tools/upscale"));
 const UserLayout = lazy(() => import("@/layouts/user-layout"));
 const RequireFeature = lazy(() => import("@/components/auth/require-feature").then((module) => ({ default: module.RequireFeature })));
 
@@ -138,7 +137,6 @@ export const router = createBrowserRouter([
             },
             { path: "/settings", element: <RequireAuth>{deferred(<SettingsPage />)}</RequireAuth> },
             { path: "/test-voice-recording", element: <RequireAuth>{deferred(<TestVoiceRecording />)}</RequireAuth> },
-            { path: "/tools/upscale", element: <RequireAuth>{deferred(<ToolsUpscalePage />)}</RequireAuth> },
             {
                 path: "/projects",
                 element: (

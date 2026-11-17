@@ -750,43 +750,6 @@ func TestOfficialJimengImageSplitsPixelSize(t *testing.T) {
 	}
 }
 
-func TestOfficialOpenAIAudioUsesBinaryPayload(t *testing.T) {
-	adapter := officialPackageAdapter(t, "openai-audio.yingce-plugin", "openai-audio")
-	result, err := adapter.ParseCreate(context.Background(), []byte("ID3fake-mp3"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Status != StatusSucceeded || result.Result == nil || len(result.Result.Audios) != 1 {
-		t.Fatalf("result = %#v", result)
-	}
-}
-
-func TestOfficialOpenAIAudioSpeedDefaultsInvalidAndZeroValues(t *testing.T) {
-	adapter := officialPackageAdapter(t, "openai-audio.yingce-plugin", "openai-audio")
-	for _, test := range []struct {
-		name  string
-		value any
-		want  float64
-	}{
-		{name: "invalid", value: "not-a-number", want: 1},
-		{name: "zero", value: "0", want: 1},
-		{name: "valid", value: "1.25", want: 1.25},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			spec, err := adapter.BuildCreate(context.Background(), RequestContext{Request: GenerationRequest{
-				Model: "gpt-4o-mini-tts", Prompt: "hello", Extra: map[string]any{"audioSpeed": test.value},
-			}})
-			if err != nil {
-				t.Fatal(err)
-			}
-			body := manifestTestBody(t, spec)
-			if got := body["speed"]; !reflect.DeepEqual(got, test.want) {
-				t.Fatalf("speed = %#v, want %v", got, test.want)
-			}
-		})
-	}
-}
-
 func TestOfficialArkSeedreamParsesB64JSONAsDataURL(t *testing.T) {
 	for _, tc := range []struct {
 		packageName, providerID string

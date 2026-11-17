@@ -531,8 +531,6 @@ func (s *Service) processCanvasGenerationTask(ctx context.Context, userID string
 		return result, taskErr
 	case "video":
 		return runVideoTask(ctx, input)
-	case "audio":
-		return runAudioTask(ctx, input)
 	default:
 		return nil, fmt.Errorf("不支持的生成模式：%s", input.Mode)
 	}
@@ -1139,4 +1137,14 @@ func withSystemPrompt(config providerConfig, prompt string) string {
 
 func metadataString(metadata map[string]interface{}, key string) string {
 	return strings.TrimSpace(stringField(metadata, key))
+}
+
+func decodeProviderDataURL(value string) (string, []byte, error) {
+	header, encoded, ok := strings.Cut(value, ",")
+	if !ok || !strings.HasPrefix(header, "data:") || !strings.HasSuffix(strings.ToLower(header), ";base64") {
+		return "", nil, errors.New("data URL 格式无效")
+	}
+	mimeType := strings.TrimSuffix(strings.TrimPrefix(header, "data:"), ";base64")
+	data, err := base64.StdEncoding.DecodeString(encoded)
+	return mimeType, data, err
 }

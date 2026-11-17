@@ -54,7 +54,6 @@ type CanvasNodeToolbarProps = {
     onExtractVideoFrames: (node: CanvasNodeData) => void;
     onExtractAudioFromVideo: (node: CanvasNodeData) => void;
     onTrimVideoSegments: (node: CanvasNodeData) => void;
-    onUpscale1080p: (node: CanvasNodeData) => void;
     onScriptToStoryboard: (node: CanvasNodeData) => void;
     onGenerateStoryboardRows: (node: CanvasNodeData) => void;
     onSubtitles: (node: CanvasNodeData) => void;
@@ -62,7 +61,6 @@ type CanvasNodeToolbarProps = {
     extractingVideoFrames: boolean;
     extractingAudio: boolean;
     trimmingVideo: boolean;
-    upscaling1080p: boolean;
     scriptingToStoryboard: boolean;
     generatingStoryboardRows: boolean;
     onReversePrompt: (node: CanvasNodeData) => void;
@@ -126,7 +124,6 @@ export function CanvasNodeToolbar({
     onExtractVideoFrames,
     onExtractAudioFromVideo,
     onTrimVideoSegments,
-    onUpscale1080p,
     onScriptToStoryboard,
     onGenerateStoryboardRows,
     onSubtitles,
@@ -134,7 +131,6 @@ export function CanvasNodeToolbar({
     extractingVideoFrames,
     extractingAudio,
     trimmingVideo,
-    upscaling1080p,
     scriptingToStoryboard,
     generatingStoryboardRows,
     onReversePrompt,
@@ -253,7 +249,7 @@ export function CanvasNodeToolbar({
         onNodeToggleDialog: onToggleDialog, onNodeAnnotate: onAnnotate, onNodeGenerateImage: onGenerateImage, onNodeUpload: onUpload, onNodeDownload: onDownload,
         onNodeSaveAsset: onSaveAsset, onNodeMaskEdit: onMaskEdit, onNodeRemoveBackground: onRemoveBackground, onNodeEmotion: onEmotion, onNodePortraitTexture: onPortraitTexture, onNodeCrop: onCrop,
         onNodeSplit: (target) => onSplit(target, { rows: 2, columns: 2 }), onNodeUpscale: onUpscale, onNodeSuperResolve: onSuperResolve, onNodeAngle: onAngle, onNodeViewImage: onViewImage,
-        onNodeExtractVideoFrames: onExtractVideoFrames, onNodeExtractAudioFromVideo: onExtractAudioFromVideo, onNodeTrimVideoSegments: onTrimVideoSegments, onNodeUpscale1080p: onUpscale1080p, onNodeScriptToStoryboard: onScriptToStoryboard, onNodeGenerateStoryboardRows: onGenerateStoryboardRows, onNodeReversePrompt: onReversePrompt, onNodeToggleFreeResize: onToggleFreeResize,
+        onNodeExtractVideoFrames: onExtractVideoFrames, onNodeExtractAudioFromVideo: onExtractAudioFromVideo, onNodeTrimVideoSegments: onTrimVideoSegments, onNodeScriptToStoryboard: onScriptToStoryboard, onNodeGenerateStoryboardRows: onGenerateStoryboardRows, onNodeReversePrompt: onReversePrompt, onNodeToggleFreeResize: onToggleFreeResize,
         onNodeSubtitles: onSubtitles, onNodeTimeline: onTimeline, onNodeToggleLocked: onToggleLocked, onNodeCopyPrompt: copyImagePrompt,
     } as Partial<ToolbarHandlers> as ToolbarHandlers;
 
@@ -271,8 +267,7 @@ export function CanvasNodeToolbar({
         extractingVideoFrames,
         extractingAudio,
         trimmingVideo,
-        upscaling1080p,
-        scriptingToStoryboard,
+            scriptingToStoryboard,
         generatingStoryboardRows,
         mergingVideos: false,
         addPanelOpen: false,

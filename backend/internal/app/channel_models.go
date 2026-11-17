@@ -702,7 +702,6 @@ func (s *Service) TestAdminChannelModel(ctx context.Context, actor *model.User, 
 		"text":  "Reply with OK.",
 		"image": "A simple gray circle on a white background.",
 		"video": "A static gray circle on a white background.",
-		"audio": "Model test.",
 	}[capability]
 	videoSeconds := "6"
 	videoSecondsValue := 6
@@ -782,7 +781,7 @@ func (s *Service) TestAdminChannelModel(ctx context.Context, actor *model.User, 
 	case "video":
 		_, err = runVideoTask(testCtx, input)
 	case "audio":
-		_, err = runAudioTask(testCtx, input)
+		err = errors.New("音频生成已下线")
 	}
 	if err != nil {
 		status := http.StatusBadGateway

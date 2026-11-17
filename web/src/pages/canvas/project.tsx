@@ -906,8 +906,6 @@ function InfiniteCanvasPage() {
         openVideoSegmentExtractor,
         upscaleImageNode,
         upscaleNodeId,
-        upscaleVideoNode1080p,
-        upscalingNodeId,
         scriptNodeToStoryboard,
         scriptToStoryboardNodeId,
         generateStoryboardRows,
@@ -3010,7 +3008,6 @@ function InfiniteCanvasPage() {
                             onExtractVideoFrames={openVideoFrameExtractor}
                             onExtractAudioFromVideo={(node) => void extractAudioFromVideo(node)}
                             onTrimVideoSegments={openVideoSegmentExtractor}
-                            onUpscale1080p={(node) => void upscaleVideoNode1080p(node)}
                             onScriptToStoryboard={(node) => void scriptNodeToStoryboard(node)}
                             onGenerateStoryboardRows={(node) => void generateStoryboardRows(node)}
                             onSubtitles={(node) => setSubtitleNodeId(node.id)}
@@ -3018,7 +3015,6 @@ function InfiniteCanvasPage() {
                             extractingVideoFrames={toolbarNode?.id === extractingVideoFramesNodeId}
                             extractingAudio={segmentRunningMode === "audio"}
                             trimmingVideo={segmentRunningMode === "video"}
-                            upscaling1080p={toolbarNode?.id === upscalingNodeId}
                             scriptingToStoryboard={toolbarNode?.id === scriptToStoryboardNodeId}
                             generatingStoryboardRows={toolbarNode?.id === generateStoryboardRowsNodeId}
                             onNineGrid={(node, id, label, icon) => void generateNineGridNode(node, id, label, icon)}

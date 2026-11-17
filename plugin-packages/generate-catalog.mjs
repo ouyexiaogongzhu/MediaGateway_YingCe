@@ -566,21 +566,6 @@ add({
 });
 
 add({
-  id: "openai-audio", providerId: "openai-audio", name: "OpenAI Audio Speech", vendor: "OpenAI", capability: "audio",
-  baseUrl: "https://api.openai.com", auth: bearer, params: audioParams,
-  notes: "同步 /v1/audio/speech 返回原始音频流，由 binaryPayload 包装为统一音频结果。",
-  create: jsonCreate("/v1/audio/speech", {
-    model: ref("request.model"),
-    input: ref("request.prompt"),
-    voice: coalesce(ref("request.extra.audioVoice"), ref("request.providerOptions.openai-audio.voice"), "alloy"),
-    response_format: coalesce(ref("request.extra.audioFormat"), ref("request.providerOptions.openai-audio.response_format"), "mp3"),
-    speed: coalesce(nonZeroFloat(ref("request.extra.audioSpeed")), ref("request.providerOptions.openai-audio.speed"), 1),
-    instructions: omit(coalesce(ref("request.extra.audioInstructions"), ref("request.providerOptions.openai-audio.instructions")))
-  }),
-  response: { binaryPayload: true, resultKind: "audio", status: "succeeded", errorPaths: ["error.code"], messagePaths: ["error.message"] }
-});
-
-add({
   id: "async-audio", providerId: "async-audio", name: "Async Audio Tasks", vendor: "OpenAI compatible", capability: "audio",
   baseUrl: "https://api.openai.com", auth: bearer, params: audioParams,
   notes: "异步音频任务：创建 /v1/audio/tasks，轮询同一路径，结果优先 URL，否则下载 /content。",

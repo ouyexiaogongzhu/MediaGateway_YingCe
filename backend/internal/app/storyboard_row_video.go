@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -18,9 +17,9 @@ import (
 	"infinite-canvas/backend/internal/model"
 )
 
-// 单个分镜行的「视频+声音」生成编排：TTS → /v1/videos → /v1/mix → 资源库。
-// Gateway 面见 MediaGateway 的 compat_h3cweb.py（/v1/videos、/v1/mix）与
-// compat_openai.py（/v1/audio/speech）；三种任务共用同一个 job 存储，
+// 单个分镜行的视频生成编排：/v1/videos → /v1/mix（sfx）→ 资源库。
+// 配音链（/v1/audio/speech）已随 MediaGateway TTS 引擎删除而移除，行视频为无声视频。
+// Gateway 面见 MediaGateway 的 /v1/videos、/v1/mix；任务共用同一个 job 存储，
 // 轮询走 /v1/jobs/{id}（gatewayClient.wait），completed 时直接读 output_path。
 // 失败即标 failed 上抛，不重试（重试策略由批量层做）。
 
@@ -65,7 +64,6 @@ type storyboardRowCharacterRef struct {
 // rowVideoGateway 是编排对 Gateway 的全部依赖；单元测试用接口 stub，不打真网关。
 type rowVideoGateway interface {
 	CreateVideoJob(ctx context.Context, req rowVideoJobRequest) (string, error)
-	SynthesizeSpeech(ctx context.Context, voiceID string, text string, speed float64) (rowVideoSpeech, error)
 	CreateMixJob(ctx context.Context, videoJobID string, tracks []rowVideoMixTrack, keepSourceAudio bool) (string, error)
 	WaitJob(ctx context.Context, jobID string) (rowVideoJobResult, error)
 }
@@ -75,12 +73,6 @@ type rowVideoJobRequest struct {
 	Size            string   `json:"size,omitempty"`
 	Seconds         int      `json:"seconds,omitempty"`
 	ReferenceImages []string `json:"reference_images,omitempty"`
-	ReferenceAudios []string `json:"reference_audios,omitempty"`
-}
-
-type rowVideoSpeech struct {
-	WavPath         string
-	DurationSeconds float64
 }
 
 type rowVideoMixTrack struct {
@@ -97,8 +89,6 @@ type rowVideoJobResult struct {
 type rowVideoParams struct {
 	Row               storyboardRowVideoRow
 	FirstFrameDataURL string
-	VoiceKey          string
-	Speed             float64
 	Width             int
 	Height            int
 }
@@ -107,7 +97,6 @@ type rowVideoOutcome struct {
 	VideoJobID    string
 	MixJobID      string
 	MixOutputPath string
-	TTSDuration   float64
 	Seconds       int
 	VoiceMode     string
 	SfxTags       []string
@@ -196,8 +185,6 @@ func (s *Service) processStoryboardRowVideoTask(ctx context.Context, task model.
 	outcome, err := runStoryboardRowVideo(ctx, s.mediaGateway(), rowVideoParams{
 		Row:               input.Row,
 		FirstFrameDataURL: firstFrameDataURL,
-		VoiceKey:          s.storyboardRowVoiceKey(task.UserID, input.Row.Characters),
-		Speed:             1.0,
 		Width:             input.Width,
 		Height:            input.Height,
 	})
@@ -209,14 +196,13 @@ func (s *Service) processStoryboardRowVideoTask(ctx context.Context, task model.
 		return nil, nil, fmt.Errorf("登记行视频资源失败：%w", err)
 	}
 	return map[string]interface{}{
-		"videoResourceId":    resource.ID,
-		"videoResourceUrl":   "/api/resources/" + resource.ID + "/file",
-		"videoJobId":         outcome.VideoJobID,
-		"mixJobId":           outcome.MixJobID,
-		"seconds":            outcome.Seconds,
-		"ttsDurationSeconds": outcome.TTSDuration,
-		"voiceMode":          outcome.VoiceMode,
-		"sfxTags":            outcome.SfxTags,
+		"videoResourceId":  resource.ID,
+		"videoResourceUrl": "/api/resources/" + resource.ID + "/file",
+		"videoJobId":       outcome.VideoJobID,
+		"mixJobId":         outcome.MixJobID,
+		"seconds":          outcome.Seconds,
+		"voiceMode":        outcome.VoiceMode,
+		"sfxTags":          outcome.SfxTags,
 	}, nil, nil
 }
 
@@ -245,14 +231,13 @@ func waitStoryboardRowJob(ctx context.Context, gw rowVideoGateway, jobID string)
 	return rowVideoJobResult{}, lastErr
 }
 
-// runStoryboardRowVideo 执行编排步骤 1-4：fallback 补齐 → TTS → 视频任务 → 混音。
+// runStoryboardRowVideo 执行编排步骤 1-3：fallback 补齐 sfx → 视频任务 → 混音。
 // 与 Service/DB 解耦，便于对编排逻辑做表驱动单测。
 func runStoryboardRowVideo(ctx context.Context, gw rowVideoGateway, params rowVideoParams) (rowVideoOutcome, error) {
 	row := params.Row
 	out := rowVideoOutcome{}
-	dialogue := strings.TrimSpace(row.Dialogue)
-	// 存量行声音标注字段缺失时先走启发式 fallback 补齐。
-	fallback := computeStoryboardAudioFallback(dialogue, len(row.Characters), row.AudioEffects)
+	// 存量行声音标注字段缺失时先走启发式 fallback 补齐（VoiceMode 仅为标注透传，无配音链）。
+	fallback := computeStoryboardAudioFallback(strings.TrimSpace(row.Dialogue), len(row.Characters), row.AudioEffects)
 	out.VoiceMode = firstNonEmpty(strings.TrimSpace(row.VoiceMode), fallback.VoiceMode)
 	out.SfxTags = row.SfxTags
 	if len(out.SfxTags) == 0 {
@@ -263,22 +248,7 @@ func runStoryboardRowVideo(ctx context.Context, gw rowVideoGateway, params rowVi
 		return out, fmt.Errorf("分镜行缺少 videoMotionPrompt，无法生成视频")
 	}
 
-	wavPath := ""
-	if dialogue != "" {
-		// 台词同步进 prompt：h3 看着台词画口型更准（声音由参考音轨负责）。
-		prompt += "\n\n【台词】\n画面中的角色开口说出（口型与语音同步，声线贴合角色）：\n" + dialogue
-		speech, speechErr := gw.SynthesizeSpeech(ctx, params.VoiceKey, dialogue, params.Speed)
-		if speechErr != nil {
-			return out, fmt.Errorf("TTS 生成失败：%w", speechErr)
-		}
-		wavPath = speech.WavPath
-		out.TTSDuration = speech.DurationSeconds
-		defer os.Remove(wavPath) // mix 已在下方等待完成，wav 已被网关消费后才删除
-	}
 	out.Seconds = row.DurationSeconds
-	if out.TTSDuration > 0 {
-		out.Seconds = max(out.Seconds, int(math.Ceil(out.TTSDuration)))
-	}
 	if out.Seconds <= 0 {
 		out.Seconds = 1
 	}
@@ -290,14 +260,6 @@ func runStoryboardRowVideo(ctx context.Context, gw rowVideoGateway, params rowVi
 	if params.FirstFrameDataURL != "" {
 		request.ReferenceImages = []string{params.FirstFrameDataURL}
 	}
-	// 对白模式：wav 作为视频参考音轨驱动口型；旁白模式留给 mix 叠加。
-	if wavPath != "" && out.VoiceMode == "dialogue" {
-		audioDataURL, audioErr := localFileDataURL(wavPath, "audio/wav")
-		if audioErr != nil {
-			return out, fmt.Errorf("读取配音文件失败：%w", audioErr)
-		}
-		request.ReferenceAudios = []string{audioDataURL}
-	}
 	videoJobID, err := gw.CreateVideoJob(ctx, request)
 	if err != nil {
 		return out, fmt.Errorf("提交视频任务失败：%w", err)
@@ -307,7 +269,7 @@ func runStoryboardRowVideo(ctx context.Context, gw rowVideoGateway, params rowVi
 		return out, fmt.Errorf("视频生成失败（job %s）：%w", videoJobID, err)
 	}
 
-	tracks := make([]rowVideoMixTrack, 0, len(out.SfxTags)+1)
+	tracks := make([]rowVideoMixTrack, 0, len(out.SfxTags))
 	for _, tag := range out.SfxTags {
 		tag = strings.TrimSpace(tag)
 		if tag == "" {
@@ -315,11 +277,8 @@ func runStoryboardRowVideo(ctx context.Context, gw rowVideoGateway, params rowVi
 		}
 		tracks = append(tracks, rowVideoMixTrack{SfxTag: tag, GainDB: 0, StartS: 0})
 	}
-	if wavPath != "" && out.VoiceMode == "voiceover" {
-		tracks = append(tracks, rowVideoMixTrack{Path: wavPath, GainDB: 0, StartS: 0})
-	}
-	// 有台词（对白/旁白）= 有 TTS 音源 → 混音保留源音轨（对白行 h3 输出音频=参考音频）。
-	mixJobID, err := gw.CreateMixJob(ctx, videoJobID, tracks, dialogue != "")
+	// 无 TTS 音源，混音不保留源音轨（视频本身无音频轨）。
+	mixJobID, err := gw.CreateMixJob(ctx, videoJobID, tracks, false)
 	if err != nil {
 		return out, fmt.Errorf("提交混音失败：%w", err)
 	}
@@ -333,25 +292,6 @@ func runStoryboardRowVideo(ctx context.Context, gw rowVideoGateway, params rowVi
 		return out, fmt.Errorf("混音 job %s 未返回输出文件", mixJobID)
 	}
 	return out, nil
-}
-
-// storyboardRowVoiceKey 从行内第一个带资产版本的角色反查音色；查不到返回空串（渠道默认音色）。
-func (s *Service) storyboardRowVoiceKey(userID string, characters []storyboardRowCharacterRef) string {
-	for _, character := range characters {
-		if strings.TrimSpace(character.CharacterVersionID) == "" {
-			continue
-		}
-		binding, err := s.repo.CharacterVoiceBinding(character.CharacterVersionID)
-		if err != nil || strings.TrimSpace(binding.VoiceProfileID) == "" {
-			continue
-		}
-		profile, err := s.repo.VoiceProfileForUser(userID, binding.VoiceProfileID)
-		if err != nil || strings.TrimSpace(profile.VoiceKey) == "" {
-			continue
-		}
-		return profile.VoiceKey
-	}
-	return ""
 }
 
 func (s *Service) resourceImageDataURL(userID string, resourceID string) (string, error) {
@@ -371,15 +311,7 @@ func (s *Service) resourceImageDataURL(userID string, resourceID string) (string
 	return "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(data), nil
 }
 
-func localFileDataURL(path string, mimeType string) (string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
-	}
-	return "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(data), nil
-}
-
-// --- gatewayClient 对 rowVideoGateway 的实现（同步 speech；video/mix 走任务轮询） ---
+// --- gatewayClient 对 rowVideoGateway 的实现（video/mix 走任务轮询） ---
 
 func (c *gatewayClient) CreateVideoJob(ctx context.Context, req rowVideoJobRequest) (string, error) {
 	return c.postGatewayForID(ctx, "/v1/videos", req)
@@ -388,31 +320,6 @@ func (c *gatewayClient) CreateVideoJob(ctx context.Context, req rowVideoJobReque
 func (c *gatewayClient) CreateMixJob(ctx context.Context, videoJobID string, tracks []rowVideoMixTrack, keepSourceAudio bool) (string, error) {
 	return c.postGatewayForID(ctx, "/v1/mix", map[string]any{
 		"video_job_id": videoJobID, "tracks": tracks, "keep_source_audio": keepSourceAudio})
-}
-
-func (c *gatewayClient) SynthesizeSpeech(ctx context.Context, voiceID string, text string, speed float64) (rowVideoSpeech, error) {
-	payload := struct {
-		URL             string  `json:"url"`
-		DurationSeconds float64 `json:"duration_seconds"`
-	}{}
-	// 网关按 model 字段选引擎（compat_openai._is_qwen）：只有 qwen* 才走 tts_qwen，
-	// 别的名字一律落到 CosyVoice —— 而 CosyVoice 在本机缺 torch 起不来，行视频必然 TTS 失败。
-	// 说话人名走 voice 字段，tts_qwen 的 --voice 才拿得到它。
-	body := map[string]any{"model": "qwen3-tts", "input": text, "speed": speed}
-	if strings.TrimSpace(voiceID) != "" {
-		body["voice"] = voiceID
-	}
-	if err := c.getGatewayJSON(ctx, http.MethodPost, "/v1/audio/speech", body, &payload); err != nil {
-		return rowVideoSpeech{}, err
-	}
-	if strings.TrimSpace(payload.URL) == "" {
-		return rowVideoSpeech{}, fmt.Errorf("gateway /v1/audio/speech 未返回音频地址")
-	}
-	wavPath, err := c.downloadGatewayFile(ctx, payload.URL, ".wav")
-	if err != nil {
-		return rowVideoSpeech{}, fmt.Errorf("下载配音失败：%w", err)
-	}
-	return rowVideoSpeech{WavPath: wavPath, DurationSeconds: payload.DurationSeconds}, nil
 }
 
 func (c *gatewayClient) WaitJob(ctx context.Context, jobID string) (rowVideoJobResult, error) {

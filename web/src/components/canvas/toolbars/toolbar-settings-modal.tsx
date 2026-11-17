@@ -27,7 +27,6 @@ const settingsMockContext: ToolContext = {
     extractingVideoFrames: false,
     extractingAudio: false,
     trimmingVideo: false,
-    upscaling1080p: false,
     scriptingToStoryboard: false,
     generatingStoryboardRows: false,
     mergingVideos: false,
