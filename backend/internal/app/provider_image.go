@@ -107,6 +107,14 @@ func runImageTask(ctx context.Context, input canvasGenerationInput) (map[string]
 		if key, value := imageSizeParameter(input.ImageCapability, input.Config.Size); value != "" {
 			body[key] = value
 		}
+		// h3-image 草稿快車道：無參考圖且面積低於 2048² 時畫布=請求尺寸，
+		// Gateway mmh3_image 跳過 2048² 放大政策（1024×576: 52s → ~20s）。
+		// 帶參考圖不傳：ref token 綁定成本，縮畫布只省 ~17% 卻虧細節。
+		if input.Config.Model == "h3-image" && len(input.ReferenceImages) == 0 {
+			if w, h, ok := parseSizePx(input.Config.Size); ok && w*h < 4194304 {
+				body["min_generation_area"] = w * h
+			}
+		}
 		if err := postJSON(ctx, input.Config, "/images/generations", body, &payload); err != nil {
 			return nil, err
 		}
@@ -116,6 +124,20 @@ func runImageTask(ctx context.Context, input canvasGenerationInput) (map[string]
 		return nil, err
 	}
 	return map[string]interface{}{"mode": "image", "images": images}, nil
+}
+
+// parseSizePx reads "WxH" into pixels; ok=false for anything else.
+func parseSizePx(raw string) (int, int, bool) {
+	parts := strings.Split(strings.TrimSpace(raw), "x")
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	w, wErr := strconv.Atoi(parts[0])
+	h, hErr := strconv.Atoi(parts[1])
+	if wErr != nil || hErr != nil || w <= 0 || h <= 0 {
+		return 0, 0, false
+	}
+	return w, h, true
 }
 
 // Validate before selecting the plugin so declarative and handwritten paths share
